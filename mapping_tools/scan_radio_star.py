@@ -332,7 +332,7 @@ class RadioStarScanner(object):
 
         self.startup_radio_client() #do this last so we don't prompt the user to start a recording early and needlessly waste disk space
 
-        print("starting scan")
+        print(f"starting scan centered at {self.frame} coordinates {self.center[0]:.3f},{self.center[0]:.3f}\r\n")
 
         #create log directory if it doesn't exist yet
         os.makedirs(opt.path,exist_ok=True)
@@ -362,8 +362,8 @@ class RadioStarScanner(object):
 
             with open(os.path.join(self.opt.path,log_file_name), 'a') as self.log_file: #do this per point just to force it to actually write to disk regularly
                 target = self.scan_points[i]
-                if opt.verbose:
-                    print(f"working on point {i+1} of {self.num_points} ar coordinates {target[0]:.3f}, {target[1]:.3f}\r\n")
+                #if opt.verbose:
+                print(f"moving to point {i+1} of {self.num_points} at coordinates {target[0]:.3f}, {target[1]:.3f}\r\n")
 
                 position_command_time = time.time() #issue this command instantly
 
@@ -393,6 +393,7 @@ class RadioStarScanner(object):
                 obs_end = obs_start + self.hold_time
                 #record settling
                 self.log_file.write(f"settled,{datetime.utcfromtimestamp(now).isoformat()}Z\r\n")
+                print(f"settled at target position, waiting for {self.hold_time} seconds")
 
 
                 #calibrator sequencing commands #timing this way is annoying 
