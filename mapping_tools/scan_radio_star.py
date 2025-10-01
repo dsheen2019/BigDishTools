@@ -332,7 +332,7 @@ class RadioStarScanner(object):
 
         self.startup_radio_client() #do this last so we don't prompt the user to start a recording early and needlessly waste disk space
 
-        print(f"starting scan centered at {self.frame} coordinates {self.center[0]:.3f},{self.center[0]:.3f} at {datetime.utcfromtimestamp(time.now()).isoformat()}Z\r\n")
+        print(f"starting scan centered at {self.frame} coordinates {self.center[0]:.3f},{self.center[0]:.3f} at {datetime.utcfromtimestamp(time.time()).isoformat()}Z\r\n")
 
         #create log directory if it doesn't exist yet
         os.makedirs(opt.path,exist_ok=True)
@@ -419,7 +419,7 @@ class RadioStarScanner(object):
                     self.log_antenna_position(posvel,postime)
 
 
-        print(f"scan finished at {datetime.utcfromtimestamp(time.now()).isoformat()}Z")
+        print(f"scan finished at {datetime.utcfromtimestamp(time.time()).isoformat()}Z")
         print(f"returning antenna to stow position and exiting")
         self.dish.stow_pos()
 
