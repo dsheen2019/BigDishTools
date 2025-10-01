@@ -264,9 +264,9 @@ class RadioStarScanner(object):
         velname_0 = f"{self.coordinate_names[self.frame][0]}_vel"
         velname_1 = f"{self.coordinate_names[self.frame][1]}_vel"
 
-        posvel = self.dish.get_posvel(coords=self.frame, power=self.opt.power)
+        posvel = self.dish.get_posvel(coords=self.frame, power=False)
 
-        return np.array([posvel[posname_0], posvel[posname_1], posvel[velname_0], posvel[velname_1]]), pos['time']
+        return np.array([posvel[posname_0], posvel[posname_1], posvel[velname_0], posvel[velname_1]]), posvel['time']
 
     def log_antenna_position(self, pos, time):
         """log antenna pointing position and time"""
@@ -416,17 +416,6 @@ class RadioStarScanner(object):
                         posvel = np.array([target[0], target[1], 0, 0])
                         postime = time.time()
                     self.log_antenna_position(posvel,postime)
-
-            
-            
-
-
-
-
-
-
-
-
 
 
 
