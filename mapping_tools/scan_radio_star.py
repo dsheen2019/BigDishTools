@@ -7,6 +7,11 @@
 
 import os
 import sys
+
+wdir_path = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(os.path.join(wdir_path, '../dish_client')) 
+sys.path.append(os.path.join(wdir_path, '../radio_client')) 
+
 import digital_rf as drf
 from datetime import datetime, timezone
 import time
@@ -14,6 +19,7 @@ import argparse
 import csv
 import time
 
+import numpy as np
 import astropy.units as u
 from astropy.coordinates import SkyCoord, ICRS
 from astropy.time import Time
@@ -34,7 +40,7 @@ class RadioStarScanner(object):
             'radec': ['ra', 'dec']
         }
 
-
+        self.loop_constant = 0.5 #seconds
 
     def authenticate_to_bigdish(self):
 
@@ -92,8 +98,21 @@ class RadioStarScanner(object):
         self.radio = RadioZmqClient(sub_port=self.opt.sub_port, pub_port=self.opt.pub_port)
 
         time.sleep(1.0)
-        self.radio.initialize_gpio()
+        self.initialize_gpio()
         time.sleep(1.0)
+
+    def initialize_gpio(self):
+        """ 
+        Hard Code initial setup of radio GPIO config for bigdish/westford experiment
+        sleep periods in the below are because for some reason the radio misses commands 
+        if these are run too fast and doesn't fully configure its outputs conrrectly
+        """
+
+        self.radio.set_gpio_attr( 'FP0A', 'CTRL', 0x000, 0b11)
+        time.sleep(0.1)
+        self.radio.set_gpio_attr( 'FP0A', 'DDR', 0xFFF, 0b11)
+        time.sleep(0.1)
+        self.radio.set_gpio_attr('FP0A', 'OUT', 0, 3)
 
     def get_log_path(self):
         """get path to save logs to"""
@@ -114,34 +133,51 @@ class RadioStarScanner(object):
         else:
             invalid_frame = True
             while invalid_frame: #be nice and loop this one if user typos something
-                frame = input("Please enter coordinate frame for scan ('azel', 'radec', or 'galactic'):")
+                frame = input("Please enter coordinate frame for scan ('azel', 'radec', or 'gal'):")
                 if frame in self.valid_frames:
                     self.frame = frame
                     invalid_frame = False
 
         ##center point
-
-        if len(opt.center < 2):
+        if opt.center == None:
             coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} coordinate of scan center in decimal degrees:"))
             coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} coordinate of scan center in decimal degrees:"))
 
             self.center = np.array([coord1,coord2])
+
+        elif len(opt.center) < 2:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} coordinate of scan center in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} coordinate of scan center in decimal degrees:"))
+
+            self.center = np.array([coord1,coord2])
+
         else:
             self.center = np.array(opt.center)
 
         ##scan bounds
-
-        if len(opt.bounds < 2):
+        if opt.bounds == None:
             coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} half-width of scan in decimal degrees:"))
             coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} half-width of scan in decimal degrees:"))
 
-            self.bounds = np.array([[self.center[0] - coord1, self.center[0] + coord1],[self.center[1] - coord2, self.center[1] + coord2]])
+            self.bounds = np.array([coord1,coord2])
+
+        elif len(opt.bounds) < 2:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} half-width of scan in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} half-width of scan in decimal degrees:"))
+
+            self.bounds = np.array([coord1,coord2])
+
         else:
-            self.bounds = np.array([[self.center[0] - opt.bounds[0], self.center[0] + opt.bounds[0]],[self.center[1] - opt.bounds[1], self.center[1] + opt.bounds[1]]])
+            self.bounds = np.array(opt.bounds)
 
         ### step sizes
+        if opt.step == None:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} step size in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} step size in decimal degrees:"))
 
-        if len(opt.step < 2):
+            self.step = np.array([coord1,coord2])
+
+        elif len(opt.step) < 2:
             coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} step size in decimal degrees:"))
             coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} step size in decimal degrees:"))
 
@@ -183,13 +219,13 @@ class RadioStarScanner(object):
         compute the points in the scan and estimate completion time
         """
 
-        axis_0_num_points = int((self.bounds[0,1]-self.bound[0,0])/self.step[0])+1
-        edge = (axis_0_num_points -1)/2 * axis_0_num_points
-        axis_0_points = self.center[0] + np.arange(-edge,edge+self.step[0]/2,self.step[0])
+        axis_0_num_points = int(2*self.bounds[0]/self.step[0])+1
+        edge_0 = (axis_0_num_points -1)/2 * self.step[0]
+        axis_0_points = self.center[0] + np.linspace(-edge_0,edge_0,axis_0_num_points)
        
-        axis_1_num_points = int((self.bounds[1,1]-self.bound[1,0])/self.step[1])+1
-        edge = (axis_1_num_points -1)/2 * axis_1_num_points
-        axis_1_points = self.center[1] + np.arange(-edge,edge+self.step[1]/2,self.step[1])
+        axis_1_num_points = int(2*self.bounds[1]/self.step[1])+1
+        edge_1 = (axis_1_num_points -1)/2 * self.step[1]
+        axis_1_points = self.center[1] + np.linspace(-edge_1,edge_1,axis_1_num_points)
 
         scan_points = []
         #note this could be more efficient with reversing scan direction on each line but bigdish is fast so we don't really care that much. 
@@ -199,37 +235,90 @@ class RadioStarScanner(object):
                 scan_points.append([point0,point1])
 
         self.scan_points = np.array(scan_points)
-        self.num_points = axis_0_num_points * axis_1_num_points
+        self.num_points = np.shape(self.scan_points)[0]
+        self.limits = np.array([edge_0,edge_1])
 
     def confirm_scan(self):
         """estimate scan time and make sure user really wants to do it"""
-
-        scan_time = (self.calibration* 2 + self.integration + 3) * self.num_points
-        waiting = True:
+        hold_time = self.calibration* 2 + self.integration
+        scan_time = (hold_time + np.log10(10*max(self.step))+1) * self.num_points #point to point settling estimation is very very approximate, but just meant to be an ok guess here
+        waiting = True
         while waiting:
-            response = input(f"scan will take approximately {scan_time / 3600} hours. are you sure you want to proceed? [y/n]")
+            response = input(f"scan will contain {self.num_points} points and take approximately {(scan_time / 3600):0.2f} hours. are you sure you want to proceed? [y/n]")
             if response == 'y':
                 waiting = False
-            elif:
-                response == 'n':
+            elif response == 'n':
+                print("cancelling scan and exiting")
                 exit()
             else:
                 print("please respond 'y' or 'n' ")
 
-    def log_point(self, point, time):
-        """log antenna pointing position and time"""
-        print('todo')
+        self.hold_time = hold_time
 
-    def log_calibrator_state_change(self, state, time):
-        """log calibrator state timing"""
-        print('todo')
+    def get_antenna_position(self):
+        """query and log antenna pointing position and time
+        return current posvel data for settling check"""
+
+        posname_0 = f"{self.coordinate_names[self.frame][0]}_pos"
+        posname_1 = f"{self.coordinate_names[self.frame][1]}_pos"
+        velname_0 = f"{self.coordinate_names[self.frame][0]}_vel"
+        velname_1 = f"{self.coordinate_names[self.frame][1]}_vel"
+
+        posvel = self.dish.get_posvel(coords=self.frame, power=self.opt.power)
+
+        return np.array([posvel[posname_0], posvel[posname_1], posvel[velname_0], posvel[velname_1]]), pos['time']
+
+    def log_antenna_position(self, pos, time):
+        """log antenna pointing position and time"""
+
+        self.log_file.write(f"position,{datetime.utcfromtimestamp(time).isoformat()}Z,{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f},{pos[3]:.4f}\r\n")
+
+        if self.opt.verbose:
+            print(f"position,{datetime.utcfromtimestamp(time).isoformat()}Z,{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f},{pos[3]:.4f}\r\n")
+
+    def log_calibrator_state_change(self, state, timestamp):
+        """log calibrator state timing (note this is feedforward) time is utc timestamp"""
+        self.log_file.write(f"calibrator_state,{datetime.utcfromtimestamp(timestamp).isoformat()}Z,{state}\r\n")
+
+        if self.opt.verbose:
+            print(f"calibrator_state,{datetime.utcfromtimestamp(timestamp).isoformat()}Z,{state}\r\n")
+
+    def log_target(self, target, timestamp):
+        """log target points antenna is commanded for"""
+        self.log_file.write(f"target_point,{datetime.utcfromtimestamp(timestamp).isoformat()}Z,{self.frame},{target[0]:.3f},{target[1]:.3f}\r\n")
+
+        if self.opt.verbose:
+            print(f"target_point,{datetime.utcfromtimestamp(timestamp).isoformat()}Z,{self.frame},{target[0]:.3f},{target[1]:.3f}\r\n")
+
+
+    def check_settling(self, target, position):
+        """ check is antenna is sufficiently settled for us to be ok with it"""
+        thresholds = np.array([0.1, 0.1, 0.1, 0.1]) #thresholds for positions and relative velocities
+
+        target_posvel = np.array([target[0], target[1], 0, 0]) # add velocities to target position info
+
+        error = position-target_posvel
+
+        settled = True if np.sum(np.where(np.abs(error)<thresholds, 0, 1)) < 1 else False
+        if self.opt.verbose:
+            print(f"settled: {settled}, current posvel error: {error}\r\n")
+
+        return settled
+
+    def wait_for_integer_second(self):
+        now = time.time()
+        delay = int(now)-now + 1.0
+        time.sleep(delay)
+
 
     def scan_radio_star(self):
         """
-        ###########################################
+        ##################################################
         run scan of desired radio star/make things happen
-        ###########################################
+        ##################################################
         """
+
+        opt = self.opt
 
         ## initialize things and prompt user responses
         self.authenticate_to_bigdish() #do this first since if something is wrong here it's better to know immediately
@@ -241,8 +330,101 @@ class RadioStarScanner(object):
         self.compute_scan_points()
         self.confirm_scan()
 
-
         self.startup_radio_client() #do this last so we don't prompt the user to start a recording early and needlessly waste disk space
+
+        print("starting scan")
+
+        #create log directory if it doesn't exist yet
+        os.makedirs(opt.path,exist_ok=True)
+        log_file_name = f"{datetime.utcfromtimestamp(time.time()).isoformat()}Z_{self.frame}_{self.center[0]:.2f}_{self.center[0]:.2f}.log"
+
+
+        with open(os.path.join(self.opt.path,log_file_name), 'w') as self.log_file:
+        #self.log_file = open(os.path.join(self.opt.path,log_file_name), 'w')
+
+            # add some info at beginning of log
+            self.log_file.write(f"scan_coords,{self.frame}\r\n")
+            self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[0]:.3f}\r\n")
+            self.log_file.write(f"extents,{self.limits[0]:.3f},{self.limits[1]:.3f}\r\n")
+            self.log_file.write(f"steps,{self.step[0]:.3f},{self.step[1]:.3f}\r\n")
+            self.log_file.write(f"num_points,{self.num_points}\r\n")
+            self.log_file.write(f"integration_time,{self.integration}\r\n")
+            self.log_file.write(f"cal_time,{self.calibration}\r\n")
+
+        #setup some things for calibration
+        if self.calibration >0:
+            cal_states = [1,2,0]
+        else: 
+            cal_states = [0]
+
+        #actually do things
+        for i in range(self.num_points): #iterate over all desired pointing positions
+
+            with open(os.path.join(self.opt.path,log_file_name), 'a') as self.log_file: #do this per point just to force it to actually write to disk regularly
+                target = self.scan_points[i]
+                if opt.verbose:
+                    print(f"working on point {i+1} of {self.num_points} ar coordinates {target[0]:.3f}, {target[1]:.3f}\r\n")
+
+                position_command_time = time.time() #issue this command instantly
+
+                #start tracking target point
+                if opt.test == False:
+                    self.dish.track(coords=self.frame, coord1=target[0], coord2=target[1], vel1=0.0, vel2=0.0, duration=(self.hold_time + 20.0), executeat=position_command_time)
+
+                self.log_target(target, position_command_time)
+
+                #start running settling check
+                settled = False
+                self.wait_for_integer_second() #index log to a vaguely nonsilly time
+                while settled == False:
+                    now = time.time()
+                    time.sleep(self.loop_constant - (now % self.loop_constant)) #only bother checking every half second or so
+                    if opt.test == False:
+                        posvel, postime = self.get_antenna_position()
+                    else: #fake posvel to test rest of code
+                        posvel = np.array([target[0], target[1], 0, 0])
+                        postime = time.time()
+                    self.log_antenna_position(posvel,postime)
+                    settled = self.check_settling(target, posvel)
+                    
+
+                now = time.time()
+                obs_start = int(now+0.5)+1 #guarantee radio can respond fast enough and dish has really fully settled more or less
+                obs_end = obs_start + self.hold_time
+                #record settling
+                self.log_file.write(f"settled,{datetime.utcfromtimestamp(now).isoformat()}Z\r\n")
+
+
+                #calibrator sequencing commands #timing this way is annoying 
+                offset = 0
+                for state in cal_states:
+
+                    self.radio.set_command_timestamp(obs_start + offset * self.calibration)
+                    self.radio.set_gpio_state(state)
+                    self.radio.clear_command_time()
+                    self.log_calibrator_state_change(state, obs_start)
+                    offset +=1
+                    time.sleep(0.1) #just don't want to overwhelm radio
+                
+                #run wait through the rest of the observation window
+                while now < obs_end:
+                    now = time.time()
+                    time.sleep(self.loop_constant - (now % self.loop_constant))
+                    if opt.test == False:
+                        posvel, postime = self.get_antenna_position()
+                    else: #fake posvel to test rest of code
+                        posvel = np.array([target[0], target[1], 0, 0])
+                        postime = time.time()
+                    self.log_antenna_position(posvel,postime)
+
+            
+            
+
+
+
+
+
+
 
 
 
