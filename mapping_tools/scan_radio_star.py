@@ -422,6 +422,7 @@ class RadioStarScanner(object):
         print(f"scan finished at {datetime.utcfromtimestamp(time.time()).isoformat()}Z")
         print(f"returning antenna to stow position and exiting")
         self.dish.stow_pos()
+        exit()
 
 ##################################################
 # command line things
