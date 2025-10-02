@@ -403,7 +403,7 @@ class RadioStarScanner(object):
                     self.radio.set_command_timestamp(obs_start + offset * self.calibration)
                     self.radio.set_gpio_state(state)
                     self.radio.clear_command_time()
-                    self.log_calibrator_state_change(state, obs_start)
+                    self.log_calibrator_state_change(state, obs_start+ offset * self.calibration)
                     offset +=1
                     time.sleep(0.1) #just don't want to overwhelm radio
                 
