@@ -221,11 +221,12 @@ class RadioStarScanner(object):
 
         axis_0_num_points = int(2*self.bounds[0]/self.step[0])+1
         edge_0 = (axis_0_num_points -1)/2 * self.step[0]
-        axis_0_points = self.center[0] + np.linspace(-edge_0,edge_0,axis_0_num_points)
+        axis_0_points = (self.center[0] + np.linspace(-edge_0,edge_0,axis_0_num_points)) % 360
        
         axis_1_num_points = int(2*self.bounds[1]/self.step[1])+1
         edge_1 = (axis_1_num_points -1)/2 * self.step[1]
-        axis_1_points = self.center[1] + np.linspace(-edge_1,edge_1,axis_1_num_points)
+        axis_1_points = (self.center[1] + np.linspace(-edge_1,edge_1,axis_1_num_points))
+        axis_1_points = ((axis_1_points +90.0) % 180) -90.0 
 
         scan_points = []
         #note this could be more efficient with reversing scan direction on each line but bigdish is fast so we don't really care that much. 
@@ -295,7 +296,7 @@ class RadioStarScanner(object):
         """ check is antenna is sufficiently settled for us to be ok with it"""
         thresholds = np.array([0.1, 0.1, 0.1, 0.1]) #thresholds for positions and relative velocities
 
-        target_posvel = np.array([target[0], target[1], 0, 0]) # add velocities to target position info
+        target_posvel = np.array([target[0]%360, ((target[1]+90.0) % 180) - 90.0 , 0, 0]) # add velocities to target position info
 
         error = position-target_posvel
 
