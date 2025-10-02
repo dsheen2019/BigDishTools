@@ -393,7 +393,7 @@ class RadioStarScanner(object):
                 obs_end = obs_start + self.hold_time
                 #record settling
                 self.log_file.write(f"settled,{datetime.utcfromtimestamp(now).isoformat()}Z\r\n")
-                print(f"settled at target position, waiting for {self.hold_time} seconds")
+                print(f"settled at target position, waiting for {self.hold_time} seconds\r\n")
 
 
                 #calibrator sequencing commands #timing this way is annoying 
