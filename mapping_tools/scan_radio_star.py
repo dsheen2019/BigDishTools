@@ -337,7 +337,7 @@ class RadioStarScanner(object):
 
         #create log directory if it doesn't exist yet
         os.makedirs(opt.path,exist_ok=True)
-        log_file_name = f"{datetime.utcfromtimestamp(time.time()).isoformat()}Z_{self.frame}_{self.center[0]:.2f}_{self.center[0]:.2f}.log"
+        log_file_name = f"{datetime.utcfromtimestamp(time.time()).isoformat()}Z_{self.frame}_{self.center[0]:.2f}_{self.center[1]:.2f}.log"
 
 
         with open(os.path.join(self.opt.path,log_file_name), 'w') as self.log_file:
