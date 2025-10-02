@@ -241,7 +241,7 @@ class RadioStarScanner(object):
     def confirm_scan(self):
         """estimate scan time and make sure user really wants to do it"""
         hold_time = self.calibration* 2 + self.integration
-        scan_time = (hold_time + np.log10(10*max(self.step))+1) * self.num_points #point to point settling estimation is very very approximate, but just meant to be an ok guess here
+        scan_time = (hold_time + 5*np.sqrt(max(self.step))+2) * self.num_points #point to point settling estimation is very very approximate, but just meant to be an ok guess here
         waiting = True
         while waiting:
             response = input(f"scan will contain {self.num_points} points and take approximately {(scan_time / 3600):0.2f} hours. are you sure you want to proceed? [y/n]")
