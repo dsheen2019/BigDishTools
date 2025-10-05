@@ -202,7 +202,7 @@ class RadioStarScanner(object):
         """
 
         #want a range of offsets for the beam in order to generate a solid estimate
-        offsets = np.array([0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0 ])*self.beamwidth
+        offsets = np.array([0.0, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0])*self.beamwidth
 
         angles = np.array([0,120, 240]) #in degrees
 
