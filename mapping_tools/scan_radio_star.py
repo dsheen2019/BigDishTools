@@ -216,7 +216,7 @@ class RadioStarScanner(object):
                 x_correction = np.cos(np.deg2rad(y))
                 x = (np.cos(np.deg2rad(angle))*offsets[i])/x_correction +self.center[0]
 
-                scan_point.append([x,y])                
+                scan_points.append([x,y])                
 
         self.scan_points = np.array(scan_points)
         self.num_points = np.shape(self.scan_points)[0]
