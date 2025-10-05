@@ -212,7 +212,7 @@ class RadioStarScanner(object):
         scan_points.append([self.center[0], self.center[1]]) #scan target center first
 
         #3 armed scan over the target radio star
-        for angle in angles:
+        for angle in main_angles:
             for i in range(1, len(offsets)): #don't duplicate center point
                 y = np.sin(np.deg2rad(angle))*offsets[i] +self.center[1] 
                 x_correction = np.cos(np.deg2rad(y))
