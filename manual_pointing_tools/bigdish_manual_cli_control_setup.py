@@ -6,6 +6,12 @@
 # and we can authenticate to the dish
 #
 #######################################################################
+import os
+import sys
+
+wdir_path = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(os.path.join(wdir_path, '../dish_client')) 
+sys.path.append(os.path.join(wdir_path, '../radio_client')) 
 
 from bigdish_client import BigDishClient
 #import astropy.units as u
