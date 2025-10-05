@@ -204,19 +204,31 @@ class RadioStarScanner(object):
         #want a range of offsets for the beam in order to generate a solid estimate
         offsets = np.array([0.0, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0])*self.beamwidth
 
-        angles = np.array([0,120, 240]) #in degrees
+        half_angles = np.array([60, 180, 300])
+        main_angles = np.array([0,120, 240]) #in degrees
 
         scan_points = []
 
         scan_points.append([self.center[0], self.center[1]]) #scan target center first
 
+        #3 armed scan over the target radio star
         for angle in angles:
             for i in range(1, len(offsets)): #don't duplicate center point
                 y = np.sin(np.deg2rad(angle))*offsets[i] +self.center[1] 
                 x_correction = np.cos(np.deg2rad(y))
                 x = (np.cos(np.deg2rad(angle))*offsets[i])/x_correction +self.center[0]
 
-                scan_points.append([x,y])                
+                scan_points.append([x,y]) 
+
+        # add a set of points between the arms just far enough offset to give better confidence of the beam center
+        for angle in half_angles:
+            offset = offsets[2]
+            y = np.sin(np.deg2rad(angle))*offset +self.center[1] 
+            x_correction = np.cos(np.deg2rad(y))
+            x = (np.cos(np.deg2rad(angle))*offset)/x_correction +self.center[0]
+
+            scan_points.append([x,y])
+
 
         self.scan_points = np.array(scan_points)
         self.num_points = np.shape(self.scan_points)[0]
