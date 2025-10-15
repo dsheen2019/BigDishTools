@@ -339,7 +339,7 @@ class RadioStarScanner(object):
 
             # add some info at beginning of log
             self.log_file.write(f"scan_coords,{self.frame}\r\n")
-            self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[0]:.3f}\r\n")
+            self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[1]:.3f}\r\n")
             self.log_file.write(f"num_points,{self.num_points}\r\n")
             self.log_file.write(f"integration_time,{self.integration}\r\n")
             self.log_file.write(f"cal_time,{self.calibration}\r\n")

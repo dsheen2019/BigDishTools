@@ -345,7 +345,7 @@ class GridMapper(object):
 
             # add some info at beginning of log
             self.log_file.write(f"scan_coords,{self.frame}\r\n")
-            self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[0]:.3f}\r\n")
+            self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[1]:.3f}\r\n")
             self.log_file.write(f"extents,{self.limits[0]:.3f},{self.limits[1]:.3f}\r\n")
             self.log_file.write(f"steps,{self.step[0]:.3f},{self.step[1]:.3f}\r\n")
             self.log_file.write(f"num_points,{self.num_points}\r\n")
