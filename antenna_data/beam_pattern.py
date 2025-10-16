@@ -3,6 +3,8 @@
 
 # dsheen 2025/10/16
 # Tool for getting an expected band beam response for a given offset angle of the antenna relative to a source
+# This has heritage to my temperature modelling code, which is why there are some unused cartesian arrays in this
+# I've left that in to make it easier to incorporate back into a streamlined version of that code at some point
 
 import os
 import sys
@@ -49,7 +51,7 @@ class BeamPattern(object):
         #get pattern
         self.frequency = frequency*u.MHz
 
-        self.pattern_data, self.thetas, self.phis = self.get_total_directivity_pattern([self.frequency]):
+        self.pattern_data, self.thetas, self.phis, self.thetastep, self.phistep = self.get_total_directivity_pattern([self.frequency])
         self.norm_pattern_data = self.get_normalized_directivity(self.pattern_data)
 
         #flag if theta is 360 degree or 180 (eg, does phi need to be wrapped)
@@ -124,7 +126,7 @@ class BeamPattern(object):
         Total_Directivity = Copolar_Directivity+Crosspolar_Directivity
 
         directivity = 10*np.log10(np.max(Total_Directivity))
-        print("directivity = ", directivity)
+        print("total directivity = ", directivity)
 
         phistep = 180/len(np.unique(Phi))
         print(f'phistep = {phistep}')
@@ -152,11 +154,11 @@ class BeamPattern(object):
             #and make all the datapoints available as linear values
             #patterndata[i,6] = 10**(patterndata[i,5]/10)
         #swap this into a format that's faster to operate on
-        return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F'), np.unique(Theta), np.unique(Phi)
+        return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F'), np.unique(Theta), np.unique(Phi), thetastep, phistep
 
     def get_normalized_directivity(self, pattern):
         #normalize peak directivity to unity
-        patterndata = pattern.reshape(len(np.unique(Theta))*len(np.unique(Phi)),9, order='F')
+        patterndata = pattern.reshape(np.shape(pattern)[0]*np.shape(pattern)[1],9, order='F')
         directivity = np.max(patterndata[:,6])
         log_directivity = np.max(patterndata[:,5])
         patterndata[:,5] = patterndata[:,5] - log_directivity
@@ -164,38 +166,85 @@ class BeamPattern(object):
         patterndata[:,7] = patterndata[:,7]/directivity
         patterndata[:,8] = patterndata[:,8]/directivity
         
-        return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F')
+        return patterndata.reshape(np.shape(pattern), order='F')
 
-    def get_point_total_directivity(self, coords):
+
+
+    def get_linear_total_directivities(self, thetas, phis, normalized=True):
         """
-        Tool to get the approx directivity of a point in theta/phi space
-        coords (array of thetas and phis)
-            theta should be between 0 and 180, phi should be between 0 and 360
+        return the approx directivities of an array of points in theta/phi space
+
+        thetas: array of theta values. should be between 0 and 180, 
+        phis: array of phi values: should be between 0 and 360
+
+        normalized: whether or not to return the normalized directivity value
         """
 
         #force coordinat systems to be compatible
 
-        if self.theta_360
-            phis = np.mod(coords[1], 180)
-            theta_signs = - (coords[1] %360)/180 + 1 #figure out which side of 180 degrees phi is on
-            theta_signs = theta_signs / np.abs(theta_signs)
-            thetas = coords[0] * theta_signs #and apply back to theta
+        if self.theta_360:
+            phivals = np.mod(phis, 180)
+            theta_signs = np.where(phis<180, 1, -1) #flip sign of theta is phi is past 180
+            thetavals = thetas * theta_signs #and apply back to theta
         else:
-            phis = coords[1]
-            thetas = coords[0]
+            phivals = phis
+            thetavals = thetas
 
         #get directivity pattern
-
-        linear_total_directivity = self.norm_pattern_data[:,:,6]
-        #tack on a repeat value at the end to make life easier
-        if self.theta_360:
-            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[:,0],axis=1))
-            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[0],axis=0)
+        if normalized:
+            linear_total_directivity = self.norm_pattern_data[:,:,6]
         else:
-            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[:,0],axis=1)
-            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[0],axis=0)
+            linear_total_directivity = self.pattern_data[:,:,6]
 
-        #interpolate between points if necessary
+        #get coordinate axes
+        theta_axis = self.thetas
+        phi_axis = self.phis
+        #tack on a repeat values at the end to make life easier when interpolating
+        #note this really should only ever matter for phi
+
+        if self.theta_360:
+            #append a repeat value of phi at the end of the phi axis
+            #phi runs 0 to <180 in this case so need to append to end
+            phi_axis = np.append(phi_axis, phi_axis[-1] + self.phistep)
+            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[:,0]).reshape(np.shape(linear_total_directivity)[0],1),axis=1)
+
+            #append a repeat value of theta at the appropriate end of the theta axis
+            #Theta runs >-180 to 180 in this case so append to start
+            theta_axis = np.append(theta_axis[0] - self.thetastep, theta_axis)
+            linear_total_directivity = np.append(linear_total_directivity[-1,:].reshape(1,np.shape(linear_total_directivity)[1]), linear_total_directivity, axis=0)
+
+        else:
+            #append a repeat value of phi at the end of the phi axis
+            #phi runs 0 to <360 in this case so need to append to end
+            phi_axis = np.append(phi_axis, phi_axis[-1] + self.phistep)
+            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[:,0].reshape(np.shape(linear_total_directivity)[0],1),axis=1)
+
+            #append a repeat value of theta at the end of the theta axis
+            #Theta runs 0 to <180 in this case so append to end
+            theta_axis = np.append(theta_axis, theta_axis[-1] + self.thetastep)
+            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[0,:]).reshape(1,np.shape(linear_total_directivity)[1]),axis=0)
+
+        #interpolate between points as necessary
+
+        interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
+
+        return interp_pattern((thetavals, phivals))
+
+    def cartesian_angle_to_theta_phi(self, x_deg, y_deg):
+        """
+        Convenience tool to convert a cartesian angle in the 
+        u/v axes to a polar angle about boresight so we can 
+        input them to get the antenna response
+
+        x: array of angles along horizontal axis
+        y: array of angles along vertical axis
+        """
+
+        points = np.array([x_deg,y_deg]).swapaxes(0,1)
+        thetas = np.sqrt(np.sum(np.power(points,2),axis=1))
+        phis = (np.arctan2(y_deg, x_deg) * 180 /np.pi)%360
+
+        return thetas, phis
 
 
 
