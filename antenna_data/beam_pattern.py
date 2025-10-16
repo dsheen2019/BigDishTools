@@ -29,7 +29,7 @@ class BeamPattern(object):
         self, 
         pattern_file_path=None,
         frequency=1420.0,
-        phi_rotation=0,
+        phi_rotation=0.0,
         ):
         """
         Initialize beam pattern response generator object and pull in pattern data
@@ -46,10 +46,16 @@ class BeamPattern(object):
             self.pattern_file = "Real_feed_long_spars_and_feed_frame_dense.cut"
             #self.pattern_file = 'Real_feed_long_spars_and_feed_frame.cut'
 
+        #get pattern
         self.frequency = frequency*u.MHz
 
-        self.pattern_data, self.thetas, self.phis = self.get_total_directivity_pattern():
+        self.pattern_data, self.thetas, self.phis = self.get_total_directivity_pattern([self.frequency]):
         self.norm_pattern_data = self.get_normalized_directivity(self.pattern_data)
+
+        #flag if theta is 360 degree or 180 (eg, does phi need to be wrapped)
+        self.theta_360 = True if np.min(self.thetas) < 0.0 else False
+
+
 
 
     def import_ticra_beam(self, freqs, progress=False):
@@ -103,11 +109,11 @@ class BeamPattern(object):
                 
         return np.swapaxes(data,0,1), FF_indices
 
-    def get_total_directivity_pattern(self):
+    def get_total_directivity_pattern(self, freqs):
         
         #get total directiveity from the pattern
 
-        Bigdish_Fields, FF_indices = self.import_ticra_beam([self.frequency])
+        Bigdish_Fields, FF_indices = self.import_ticra_beam(freqs)
 
         Frequencies = np.real(Bigdish_Fields[FF_indices["Freq"]])
         Theta = np.real(Bigdish_Fields[FF_indices["Theta"]])
@@ -160,5 +166,26 @@ class BeamPattern(object):
         
         return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F')
 
-    def get_point_directivity(self):
+    def get_point_directivity(self, coords):
+        """
+        Tool to get the approx directivity of a point in theta/phi space
+        coords (array of thetas and phis)
+            theta should be between 0 and 180, phi should be between 0 and 360
+        """
+
+        #force coordinat systems to be compatible
+
+        if self.theta_360
+            phis = np.mod(coords[1], 180)
+            theta_signs = - (coords[1] %360)/180 + 1 #figure out which side of 180 degrees phi is on
+            theta_signs = theta_signs / np.abs(theta_signs)
+            thetas = coords[0] * theta_signs #and apply back to theta
+        else:
+            phis = coords[1]
+            thetas = coords[0]
+
+        #interpolate between points if necessary
+
+        
+
 
