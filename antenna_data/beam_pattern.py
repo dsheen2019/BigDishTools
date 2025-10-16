@@ -166,7 +166,7 @@ class BeamPattern(object):
         
         return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F')
 
-    def get_point_directivity(self, coords):
+    def get_point_total_directivity(self, coords):
         """
         Tool to get the approx directivity of a point in theta/phi space
         coords (array of thetas and phis)
@@ -184,8 +184,21 @@ class BeamPattern(object):
             phis = coords[1]
             thetas = coords[0]
 
+        #get directivity pattern
+
+        linear_total_directivity = self.norm_pattern_data[:,:,6]
+        #tack on a repeat value at the end to make life easier
+        if self.theta_360:
+            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[:,0],axis=1))
+            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[0],axis=0)
+        else:
+            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[:,0],axis=1)
+            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[0],axis=0)
+
         #interpolate between points if necessary
 
-        
+
+
+
 
 
