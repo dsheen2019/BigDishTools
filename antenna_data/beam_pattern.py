@@ -183,13 +183,15 @@ class BeamPattern(object):
 
         #get directivity pattern
         if normalized:
-            linear_total_directivity = self.norm_pattern_data[:,:,6]
+            linear_total_directivity = self.norm_pattern_data[:,:,6].reshape(-1,1)
         else:
-            linear_total_directivity = self.pattern_data[:,:,6]
+            linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
 
         #get coordinate axes
-        theta_axis = self.thetas
-        phi_axis = self.phis
+        theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
+        phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
+
+        #theta_axis, phi_axis = np.meshgrid(self.thetas,self.phis)
         #tack on a repeat values at the end to make life easier when interpolating
         #note this really should only ever matter for phi
 
@@ -207,7 +209,7 @@ class BeamPattern(object):
 
         #interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
         #in this form if it's out of bounds it's probably more or less zero
-        interp_pattern = sp.interpolate.LinearNDInterpolator(list(zip(x_axis,y_axis)), linear_total_directivity, bounds_error=False, fill_value=0.0)
+        interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
 
         #return interp_pattern((thetavals, phivals))
         return interp_pattern((x, y))
@@ -227,9 +229,3 @@ class BeamPattern(object):
         phis = (np.arctan2(y_deg, x_deg) * 180 /np.pi)%360
 
         return thetas, phis
-
-
-
-
-
-
