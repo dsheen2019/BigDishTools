@@ -202,10 +202,12 @@ class BeamPattern(object):
         y = thetas * np.sin(np.deg2rad(phis))
 
 
+
         #interpolate between points as necessary
 
         #interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
-        interp_pattern = sp.interpolate.LinearNDInterpolator(list(zip(x_axis,y_axis)), linear_total_directivity)
+        #in this form if it's out of bounds it's probably more or less zero
+        interp_pattern = sp.interpolate.LinearNDInterpolator(list(zip(x_axis,y_axis)), linear_total_directivity, bounds_error=False, fill_value=0.0)
 
         #return interp_pattern((thetavals, phivals))
         return interp_pattern((x, y))
