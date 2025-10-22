@@ -169,7 +169,6 @@ class BeamPattern(object):
         return patterndata.reshape(np.shape(pattern), order='F')
 
 
-
     def get_linear_total_directivities(self, thetas, phis, normalized=True):
         """
         return the approx directivities of an array of points in theta/phi space
@@ -180,15 +179,7 @@ class BeamPattern(object):
         normalized: whether or not to return the normalized directivity value
         """
 
-        #force coordinat systems to be compatible
-
-        if self.theta_360:
-            phivals = np.mod(phis, 180)
-            theta_signs = np.where(phis<180, 1, -1) #flip sign of theta is phi is past 180
-            thetavals = thetas * theta_signs #and apply back to theta
-        else:
-            phivals = phis
-            thetavals = thetas
+        #force coordinate systems to be compatible by switching thru cartesian and polar
 
         #get directivity pattern
         if normalized:
@@ -202,33 +193,22 @@ class BeamPattern(object):
         #tack on a repeat values at the end to make life easier when interpolating
         #note this really should only ever matter for phi
 
-        if self.theta_360:
-            #append a repeat value of phi at the end of the phi axis
-            #phi runs 0 to <180 in this case so need to append to end
-            phi_axis = np.append(phi_axis, phi_axis[-1] + self.phistep)
-            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[:,0]).reshape(np.shape(linear_total_directivity)[0],1),axis=1)
+        #create xy scaled coords
 
-            #append a repeat value of theta at the appropriate end of the theta axis
-            #Theta runs >-180 to 180 in this case so append to start
-            theta_axis = np.append(theta_axis[0] - self.thetastep, theta_axis)
-            linear_total_directivity = np.append(linear_total_directivity[-1,:].reshape(1,np.shape(linear_total_directivity)[1]), linear_total_directivity, axis=0)
+        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
+        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
 
-        else:
-            #append a repeat value of phi at the end of the phi axis
-            #phi runs 0 to <360 in this case so need to append to end
-            phi_axis = np.append(phi_axis, phi_axis[-1] + self.phistep)
-            linear_total_directivity = np.append(linear_total_directivity, linear_total_directivity[:,0].reshape(np.shape(linear_total_directivity)[0],1),axis=1)
+        x = thetas * np.cos(np.deg2rad(phis))
+        y = thetas * np.sin(np.deg2rad(phis))
 
-            #append a repeat value of theta at the end of the theta axis
-            #Theta runs 0 to <180 in this case so append to end
-            theta_axis = np.append(theta_axis, theta_axis[-1] + self.thetastep)
-            linear_total_directivity = np.append(linear_total_directivity, np.flip(linear_total_directivity[0,:]).reshape(1,np.shape(linear_total_directivity)[1]),axis=0)
 
         #interpolate between points as necessary
 
-        interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
+        #interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
+        interp_pattern = sp.interpolate.LinearNDInterpolator(list(zip(x_axis,y_axis)), linear_total_directivity)
 
-        return interp_pattern((thetavals, phivals))
+        #return interp_pattern((thetavals, phivals))
+        return interp_pattern((x, y))
 
     def cartesian_angle_to_theta_phi(self, x_deg, y_deg):
         """
