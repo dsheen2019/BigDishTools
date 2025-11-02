@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# dsheen 2025/10/05
-# perform a scan of a radio star and log position data and calibrator states
-# not on a grid. points are optimized to help localize source accurately and estimate its intensity over background
+# dsheen 2025/09/30
+# perform a grid scan of a region of celectial coordinates and log position data and calibrator states
 # this is deliberately super handholdy to make it easier to use so it can be handed to new people
 
 import os
@@ -28,7 +27,7 @@ from astropy.time import Time
 from radio_command_client import RadioZmqClient
 from bigdish_client import BigDishClient
 
-class RadioStarScanner(object):
+class GridMapper(object):
     def __init__(self, opt):
         """initialize radio star scanner and start radio and dish connections"""
 
@@ -155,17 +154,36 @@ class RadioStarScanner(object):
         else:
             self.center = np.array(opt.center)
 
-        ##beamwidth
+        ##scan bounds
+        if opt.bounds == None:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} half-width of scan in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} half-width of scan in decimal degrees:"))
 
-        if opt.beamwidth is not None:
+            self.bounds = np.array([coord1,coord2])
 
-            try:
-                self.beamwidth = float(opt.beamwidth)
-            except:
-                self.beamwidth = float(input("Please provide antenna beamwidth in degrees:"))
+        elif len(opt.bounds) < 2:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} half-width of scan in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} half-width of scan in decimal degrees:"))
+
+            self.bounds = np.array([coord1,coord2])
+
         else:
-            self.beamwidth = float(input("Please provide antenna beamwidth in degrees:"))
-        
+            self.bounds = np.array(opt.bounds)
+
+        ### step sizes
+        if opt.step == None:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} step size in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} step size in decimal degrees:"))
+
+            self.step = np.array([coord1,coord2])
+
+        elif len(opt.step) < 2:
+            coord1 = float(input(f"please enter {self.coordinate_names[self.frame][0]} step size in decimal degrees:"))
+            coord2 = float(input(f"please enter {self.coordinate_names[self.frame][1]} step size in decimal degrees:"))
+
+            self.step = np.array([coord1,coord2])
+        else:
+            self.step = np.array(opt.step)
 
     def get_recording_parameters(self):
         """
@@ -201,42 +219,30 @@ class RadioStarScanner(object):
         compute the points in the scan and estimate completion time
         """
 
-        #want a range of offsets for the beam in order to generate a solid estimate
-        offsets = np.array([0.0, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0])*self.beamwidth
-
-        half_angles = np.array([60, 180, 300])
-        main_angles = np.array([0,120, 240]) #in degrees
+        axis_0_num_points = int(2*self.bounds[0]/self.step[0])+1
+        edge_0 = (axis_0_num_points -1)/2 * self.step[0]
+        axis_0_points = (self.center[0] + np.linspace(-edge_0,edge_0,axis_0_num_points)) % 360
+       
+        axis_1_num_points = int(2*self.bounds[1]/self.step[1])+1
+        edge_1 = (axis_1_num_points -1)/2 * self.step[1]
+        axis_1_points = (self.center[1] + np.linspace(-edge_1,edge_1,axis_1_num_points))
+        axis_1_points = ((axis_1_points +90.0) % 180) -90.0 
 
         scan_points = []
-
-        scan_points.append([self.center[0], self.center[1]]) #scan target center first
-
-        #3 armed scan over the target radio star
-        for angle in main_angles:
-            for i in range(1, len(offsets)): #don't duplicate center point
-                y = np.sin(np.deg2rad(angle))*offsets[i] +self.center[1] 
-                x_correction = np.cos(np.deg2rad(y))
-                x = (np.cos(np.deg2rad(angle))*offsets[i])/x_correction +self.center[0]
-
-                scan_points.append([x,y]) 
-
-        # add a set of points between the arms just far enough offset to give better confidence of the beam center
-        for angle in half_angles:
-            offset = offsets[2]
-            y = np.sin(np.deg2rad(angle))*offset +self.center[1] 
-            x_correction = np.cos(np.deg2rad(y))
-            x = (np.cos(np.deg2rad(angle))*offset)/x_correction +self.center[0]
-
-            scan_points.append([x,y])
-
+        #note this could be more efficient with reversing scan direction on each line but bigdish is fast so we don't really care that much. 
+        #may be worth changing to make any backgrund variability easier to smooth out though by having each point as close as possible to previous
+        for point1 in axis_1_points:
+            for point0 in axis_0_points:
+                scan_points.append([point0,point1])
 
         self.scan_points = np.array(scan_points)
         self.num_points = np.shape(self.scan_points)[0]
+        self.limits = np.array([edge_0,edge_1])
 
     def confirm_scan(self):
         """estimate scan time and make sure user really wants to do it"""
         hold_time = self.calibration* 2 + self.integration
-        scan_time = (hold_time + self.beamwidth) * self.num_points #point to point settling estimation is very very approximate, but just meant to be an ok guess here
+        scan_time = (hold_time + 5*np.sqrt(max(self.step))+2) * self.num_points #point to point settling estimation is very very approximate, but just meant to be an ok guess here
         waiting = True
         while waiting:
             response = input(f"scan will contain {self.num_points} points and take approximately {(scan_time / 3600):0.2f} hours. are you sure you want to proceed? [y/n]")
@@ -340,6 +346,8 @@ class RadioStarScanner(object):
             # add some info at beginning of log
             self.log_file.write(f"scan_coords,{self.frame}\r\n")
             self.log_file.write(f"scan_center,{self.center[0]:.3f},{self.center[1]:.3f}\r\n")
+            self.log_file.write(f"extents,{self.limits[0]:.3f},{self.limits[1]:.3f}\r\n")
+            self.log_file.write(f"steps,{self.step[0]:.3f},{self.step[1]:.3f}\r\n")
             self.log_file.write(f"num_points,{self.num_points}\r\n")
             self.log_file.write(f"integration_time,{self.integration}\r\n")
             self.log_file.write(f"cal_time,{self.calibration}\r\n")
@@ -521,9 +529,9 @@ def parse_command_line():
     formatter = argparse.RawDescriptionHelpFormatter(scriptname)
     width = formatter._width
 
-    title = "scan radio star"
+    title = "map grid"
     copyright = "Copyright (c) 2025 Massachusetts Institute of Technology"
-    shortdesc = """perform a scan over a radio star for beam parameter and SEFD estimation"""
+    shortdesc = """Tool to scan a grid around a specified point while controlling LNA calibrators"""
     desc = "\n".join(
         (
             "*" * width,
@@ -562,12 +570,21 @@ def parse_command_line():
         help="""center point coordinates of scan """,
     )
     parser.add_argument(
-        "-bw",
-        "--beamwidth",
-        dest="beamwidth",
-        help="""Antenna Beamwidth used to determine scan parameters""",
+        "-b",
+        "--bounds",
+        dest="bounds",
+        action=Extend,
+        type=evalfloat,
+        help="""distance to scan away from center point [axis0, axis2]""",
     )
-
+    parser.add_argument(
+        "-s",
+        "--step",
+        dest="step",
+        action=Extend,
+        type=evalfloat,
+        help="""step in each axis of coordinate system [axis0, axis2]""",
+    )
     parser.add_argument(
         "-i",
         "--integration",
@@ -654,5 +671,5 @@ if __name__ == "__main__":
     #if options.verbose:
     #    print("options: {0}".format(options))
 
-    radio_star_scanner = RadioStarScanner(options)
-    radio_star_scanner.scan_radio_star()
+    grid_scanner = GridMapper(options)
+    grid_scanner.scan_radio_star()
