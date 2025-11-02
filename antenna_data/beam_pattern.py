@@ -9,9 +9,10 @@
 import os
 import sys
 
-wdir_path = os.path.dirname(os.path.realpath(__file__))
+wdir_path = os.getcwd()#os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(wdir_path, '../dish_client')) 
 sys.path.append(os.path.join(wdir_path, '../radio_client')) 
+sys.path.append(os.path.join(wdir_path, '..')) 
 #sys.path.append(os.path.join(wdir_path, '../antenna_data')) 
 
 
@@ -56,7 +57,10 @@ class BeamPattern(object):
 
         #flag if theta is 360 degree or 180 (eg, does phi need to be wrapped)
         self.theta_360 = True if np.min(self.thetas) < 0.0 else False
-
+        
+        #instantiate interpolators
+        self.create_normalized_linear_interpolator()
+        self.create_linear_interpolator()
 
 
 
@@ -167,7 +171,35 @@ class BeamPattern(object):
         patterndata[:,8] = patterndata[:,8]/directivity
         
         return patterndata.reshape(np.shape(pattern), order='F')
-
+        
+        
+    def create_normalized_linear_interpolator(self):
+        """
+        create a normalized linear interpolator to be used for beam pattern modelling
+        """
+        linear_total_directivity = self.norm_pattern_data[:,:,6].reshape(-1,1)
+        
+        theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
+        phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
+        
+        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
+        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
+        
+        self.norm_interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
+        
+    def create_linear_interpolator(self):
+        """
+        create a non-normalized linear interpolator to be used for beam pattern modelling
+        """
+        linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
+        
+        theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
+        phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
+        
+        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
+        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
+        
+        self.interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
 
     def get_linear_total_directivities(self, thetas, phis, normalized=True):
         """
@@ -183,13 +215,15 @@ class BeamPattern(object):
 
         #get directivity pattern
         if normalized:
-            linear_total_directivity = self.norm_pattern_data[:,:,6].reshape(-1,1)
+            interpolator = self.norm_interp_pattern
+            #linear_total_directivity = self.norm_pattern_data[:,:,6].reshape(-1,1)
         else:
-            linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
+            interpolator = self.interp_pattern
+            #linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
 
         #get coordinate axes
-        theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
-        phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
+        #theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
+        #phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
 
         #theta_axis, phi_axis = np.meshgrid(self.thetas,self.phis)
         #tack on a repeat values at the end to make life easier when interpolating
@@ -197,8 +231,8 @@ class BeamPattern(object):
 
         #create xy scaled coords
 
-        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
-        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
+        #x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
+        #y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
 
         x = thetas * np.cos(np.deg2rad(phis))
         y = thetas * np.sin(np.deg2rad(phis))
@@ -209,10 +243,10 @@ class BeamPattern(object):
 
         #interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
         #in this form if it's out of bounds it's probably more or less zero
-        interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
+        #interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
 
         #return interp_pattern((thetavals, phivals))
-        return interp_pattern((x, y))
+        return interpolator((x, y))
 
     def cartesian_angle_to_theta_phi(self, x_deg, y_deg):
         """
