@@ -6,20 +6,18 @@
 # This has heritage to my temperature modelling code, which is why there are some unused cartesian arrays in this
 # I've left that in to make it easier to incorporate back into a streamlined version of that code at some point
 
-#updated with some improvements from sams code and rsc-sim 2026/01/21
-
 import os
 import sys
 
-wdir_path = os.getcwd()#os.path.dirname(os.path.realpath(__file__))
+wdir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(wdir_path, '../dish_client')) 
 sys.path.append(os.path.join(wdir_path, '../radio_client')) 
-sys.path.append(os.path.join(wdir_path, '..')) 
 #sys.path.append(os.path.join(wdir_path, '../antenna_data')) 
 
 
 import numpy as np
 import scipy as sp
+from scipy.stats import linregress
 from matplotlib import pyplot as plt
 from astropy.io import fits
 import numpy as np
@@ -27,9 +25,6 @@ import json
 import astropy.units as u
 import astropy.constants as const
 u.imperial.enable()
-
-from coord_frames import ground_to_beam_coord_vectorized, beam_to_ground_coord_vectorized
-
 
 class BeamPattern(object):
     def __init__(
@@ -57,15 +52,11 @@ class BeamPattern(object):
         self.frequency = frequency*u.MHz
 
         self.pattern_data, self.thetas, self.phis, self.thetastep, self.phistep = self.get_total_directivity_pattern([self.frequency])
+        self.norm_pattern_data = self.get_normalized_directivity(self.pattern_data)
 
         #flag if theta is 360 degree or 180 (eg, does phi need to be wrapped)
         self.theta_360 = True if np.min(self.thetas) < 0.0 else False
 
-        #instantiate interpolators
-        self.create_linear_interpolator()
-        #self.norm_pattern_data = self.get_normalized_directivity(self.pattern_data)
-        #self.create_normalized_linear_interpolator()
-        
 
 
 
@@ -134,8 +125,8 @@ class BeamPattern(object):
         Crosspolar_Directivity = np.power(np.abs(Bigdish_Fields[FF_indices["E_cx"]]),2)
         Total_Directivity = Copolar_Directivity+Crosspolar_Directivity
 
-        self.directivity = 10*np.log10(np.max(Total_Directivity))
-        print("total directivity = ", self.directivity)
+        directivity = 10*np.log10(np.max(Total_Directivity))
+        print("total directivity = ", directivity)
 
         phistep = 180/len(np.unique(Phi))
         print(f'phistep = {phistep}')
@@ -164,23 +155,21 @@ class BeamPattern(object):
             #patterndata[i,6] = 10**(patterndata[i,5]/10)
         #swap this into a format that's faster to operate on
         return patterndata.reshape(len(np.unique(Theta)),len(np.unique(Phi)),9, order='F'), np.unique(Theta), np.unique(Phi), thetastep, phistep
-        
-    def create_linear_interpolator(self):
-        """
-        create a non-normalized linear interpolator to be used for beam pattern modelling
-        translated to cartesian centered on boresight to avoid rollover issues
-        """
-        linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
-        
-        theta_axis = self.pattern_data[:,:,0].reshape(-1,1) #self.thetas
-        phi_axis = self.pattern_data[:,:,1].reshape(-1,1) #self.phis
-        
-        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
-        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
-        
-        self.interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
 
-    def get_linear_total_directivities(self, thetas, phis, normalized=False):
+    def get_normalized_directivity(self, pattern):
+        #normalize peak directivity to unity
+        patterndata = pattern.reshape(np.shape(pattern)[0]*np.shape(pattern)[1],9, order='F')
+        directivity = np.max(patterndata[:,6])
+        log_directivity = np.max(patterndata[:,5])
+        patterndata[:,5] = patterndata[:,5] - log_directivity
+        patterndata[:,6] = patterndata[:,6]/directivity
+        patterndata[:,7] = patterndata[:,7]/directivity
+        patterndata[:,8] = patterndata[:,8]/directivity
+        
+        return patterndata.reshape(np.shape(pattern), order='F')
+
+
+    def get_linear_total_directivities(self, thetas, phis, normalized=True):
         """
         return the approx directivities of an array of points in theta/phi space
 
@@ -190,17 +179,40 @@ class BeamPattern(object):
         normalized: whether or not to return the normalized directivity value
         """
 
+        #force coordinate systems to be compatible by switching thru cartesian and polar
+
+        #get directivity pattern
+        if normalized:
+            linear_total_directivity = self.norm_pattern_data[:,:,6].reshape(-1,1)
+        else:
+            linear_total_directivity = self.pattern_data[:,:,6].reshape(-1,1)
+
         #get coordinate axes
+        theta_axis = self.norm_pattern_data[:,:,0].reshape(-1,1) #self.thetas
+        phi_axis = self.norm_pattern_data[:,:,1].reshape(-1,1) #self.phis
+
+        #theta_axis, phi_axis = np.meshgrid(self.thetas,self.phis)
+        #tack on a repeat values at the end to make life easier when interpolating
+        #note this really should only ever matter for phi
+
+        #create xy scaled coords
+
+        x_axis = theta_axis * np.cos(np.deg2rad(phi_axis))
+        y_axis = theta_axis * np.sin(np.deg2rad(phi_axis))
 
         x = thetas * np.cos(np.deg2rad(phis))
         y = thetas * np.sin(np.deg2rad(phis))
 
-        #get directivity pattern
-        if normalized:
-            return np.squeeze(self.interp_pattern(x, y)) / self.directivity
-        else:
-            return np.squeeze(self.interp_pattern(x, y))
 
+
+        #interpolate between points as necessary
+
+        #interp_pattern = sp.interpolate.RegularGridInterpolator((theta_axis,phi_axis), linear_total_directivity, method="linear")
+        #in this form if it's out of bounds it's probably more or less zero
+        interp_pattern = sp.interpolate.LinearNDInterpolator(np.array([x_axis,y_axis]).swapaxes(0,1).reshape(-1,2), linear_total_directivity, fill_value=0.0)
+
+        #return interp_pattern((thetavals, phivals))
+        return interp_pattern((x, y))
 
     def cartesian_angle_to_theta_phi(self, x_deg, y_deg):
         """
@@ -217,52 +229,3 @@ class BeamPattern(object):
         phis = (np.arctan2(y_deg, x_deg) * 180 /np.pi)%360
 
         return thetas, phis
-
-
-    def az_el_to_theta_phi(self, az_pt, el_pt, az_ant, el_ant):
-        """ 
-        vectorized conversion between az/el coords 
-        and coordinates in the beam pattern model
-        with the beam pointed at different angles 
-
-        az_pt: azimuth angle of interest
-        el_pt: elevation angle of interest
-        az_ant: antenna azimuth position
-        el_ant: antenna elevation position
-
-        returns theta/phis to index into antenna beam pattern
-        """
-
-        caz_pt = 360 - az_pt # convert to counter azimuth angle
-        dec_pt = 90 - el_pt  # convert to declination angle
-
-        caz_ant = 360 - az_ant
-        dec_ant = 90 - el_ant
-
-        theta, phi = ground_to_beam_coord_vectorized(np.radians(dec_pt), np.radians(caz_pt), np.radians(dec_ant), np.radians(caz_ant))
-        phi = (np.degrees(phi) - 90) % 360 #subtract 90 to convert to horizontal 0 degree reference orientation
-        theta = np.degrees(theta)
-
-        return theta, phi
-
-    def get_linear_antenna_gain(self, az_pt, el_pt, az_ant, el_ant):
-        """ 
-        vectorized function to return antenna gain at aa given angle
-        givven the pointing position of the antenna
-
-        az_pt: azimuth angle of interest
-        el_pt: elevation angle of interest
-        az_ant: antenna azimuth position
-        el_ant: antenna elevation position
-
-        returns theta/phis to index into antenna beam pattern
-        """
-
-        thetas, phis = self.az_el_to_theta_phi(az_pt, el_pt, az_ant, el_ant)
-        gains = self.get_linear_total_directivities(thetas, phis)
-        return np.squeeze(gains)
-
-
-
-
-
