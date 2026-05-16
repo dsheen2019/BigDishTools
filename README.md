@@ -5,10 +5,8 @@ Note: for now this is a work in progress and still needs extensive cleanup and d
 
 ## Requirements
 
-- radioconda
+- radioconda/digital_rf
 - astropy
 - numpy
 - scipy
-- digital rf
 - websockets
-- xarrays and Dask (for ITU models) 
