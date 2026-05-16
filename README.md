@@ -5,6 +5,7 @@ Note: for now this is a work in progress and still needs extensive cleanup and d
 
 ## Requirements
 
+- radioconda
 - astropy
 - numpy
 - scipy
