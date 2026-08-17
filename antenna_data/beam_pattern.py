@@ -12,7 +12,6 @@ import os
 import sys
 
 wdir_path = os.getcwd()#os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.join(wdir_path, '../dish_client')) 
 sys.path.append(os.path.join(wdir_path, '../radio_client')) 
 sys.path.append(os.path.join(wdir_path, '..')) 
 #sys.path.append(os.path.join(wdir_path, '../antenna_data')) 

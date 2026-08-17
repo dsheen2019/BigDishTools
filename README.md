@@ -28,6 +28,13 @@ specification.
 
 ## Requirements
 
+- [bigdish-client](https://github.com/w1xm/BigDishControlServer/tree/main/client), the
+  protocol client that the scripts here import as `bigdish_client`:
+
+  ```sh
+  pip install "bigdish-client @ git+https://github.com/w1xm/BigDishControlServer#subdirectory=client"
+  ```
+
 - radioconda/digital_rf
 - astropy
 - numpy

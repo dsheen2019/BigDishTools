@@ -1,5 +1,6 @@
 // JavaScript client library for the Big Dish control protocol, the browser counterpart to
-// bigdish_client.py beside it. Written for the console UI in ../bigdish_console, which
+// bigdish_client.py, which is installed from the w1xm/BigDishControlServer repository rather
+// than kept here. Written for the console UI in ../bigdish_console, which
 // imports it as @client/bigdish_client.js, but it has no dependencies beyond WebSocket and is
 // usable from any page or from Node 22+. The protocol is specified in protocol.md in the
 // w1xm/BigDishControlServer repository, alongside the server itself.
