@@ -35,6 +35,16 @@ specification.
   pip install "bigdish-client @ git+https://github.com/w1xm/BigDishControlServer#subdirectory=client"
   ```
 
+- the radio command client in [radio_client](./radio_client), for the scripts that talk to
+  the Ettus radios:
+
+  ```sh
+  pip install -e ./radio_client
+  ```
+
+  This also puts `run-radio-commands` on the PATH, for running a scheduled csv of radio
+  commands.
+
 - radioconda/digital_rf
 - astropy
 - numpy

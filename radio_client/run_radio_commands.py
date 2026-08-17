@@ -203,9 +203,10 @@ def parse_command_line():
 #
 
 # Setup Defaults
-if __name__ == "__main__":
+def main():
     """
-    Needed to add main function to use outside functions outside of module.
+    Entry point, both for the run-radio-commands console script and for running this file
+    directly.
     """
 
     # Parse the Command Line for configuration
@@ -222,3 +223,7 @@ if __name__ == "__main__":
     time.sleep(1.0)
 
     radio_control.execute_commands()
+
+
+if __name__ == "__main__":
+    main()
