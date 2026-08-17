@@ -483,7 +483,12 @@
     }
 
     aside {
-        width: 410px;
+        /* Wide enough that the az/el readout in StatusPanel never wraps, which on a moving
+         * dish would otherwise reflow line by line and read as a fault. Each axis needs
+         * label 18 + gap 8 + 7ch at 26px (109) + gap 8 + 10ch at 11px (66) = 209 px, so two
+         * of them with a 20 px gap need 438, plus the panel's 24 px padding and 2 px border.
+         * IBM Plex Mono advances 0.6em, so those ch figures are exact. */
+        width: 480px;
         flex-shrink: 0;
         display: flex;
         flex-direction: column;

@@ -73,10 +73,15 @@
 </template>
 
 <style scoped>
+    /* Az and el sit side by side and stay there: reflowing onto two lines as the digits
+     * change looks like a fault on a moving dish. Every field below reserves the width of
+     * its widest possible value in ch, which is exact here because the readout is IBM Plex
+     * Mono with tabular figures, so the layout never moves while the numbers do. The
+     * sidebar width in App.vue is set to fit the total. */
     .readout-main {
         display: flex;
-        flex-wrap: wrap; /* never clip: a too-wide readout drops to its own line instead */
-        gap: 8px 24px;
+        flex-wrap: nowrap;
+        gap: 8px 20px;
         margin-bottom: 10px;
     }
 
@@ -84,6 +89,7 @@
         display: flex;
         align-items: baseline;
         gap: 8px;
+        white-space: nowrap;
     }
 
     .axis-label {
@@ -97,6 +103,8 @@
     .axis-value {
         font-size: 26px;
         font-weight: 600;
+        /* "-90.00" plus the degree sign: the widest either axis can be */
+        min-width: 7ch;
     }
 
     .unit {
@@ -107,6 +115,9 @@
     .axis-vel {
         font-size: 11px;
         color: var(--muted);
+        /* "-30.000°/s": the dish can manage 30 degrees a second, so allow the sign, five
+         * digits and the unit */
+        min-width: 10ch;
     }
 
     .frames {
