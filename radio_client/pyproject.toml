@@ -1,0 +1,24 @@
+# Packaging for the radio command client, so scripts can import it from anywhere instead of
+# putting this folder on sys.path. Install from a clone with
+#
+#     pip install -e ./radio_client
+#
+# Only pyzmq is declared. The other two imports here, pmt and digital_rf, come from GNU Radio
+# and are not installable from PyPI in practice -- they are part of the radioconda environment
+# these tools run in, so declaring them would make pip try, and fail, to build them.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bigdish-radio-client"
+version = "0.1.0"
+description = "Client for commanding the Ettus radios over ZMQ, and running scheduled command files"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pyzmq"]
+
+[tool.setuptools]
+# flat modules, so `from radio_command_client import RadioZmqClient` keeps working unchanged
+py-modules = ["radio_command_client", "run_radio_commands"]
