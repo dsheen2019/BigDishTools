@@ -1,6 +1,10 @@
 __pycache__/
 node_modules/
 dist/
+# ...except the console's, which is committed so the app can be served by python alone on a
+# machine with no node toolchain. Rebuild and commit it after changing anything under
+# bigdish_console/src.
+!bigdish_console/dist/
 .tle_cache/
 .ipynb_checkpoints/
 build/

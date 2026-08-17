@@ -12,13 +12,25 @@ ground stations, satellites), pointing offsets in four frames, and a rise-to-set
 drawn over both charts for the selected target. It runs on the operator's own machine and
 binds to loopback only.
 
+The built app is committed, so on a machine with Python and no Node toolchain it is just:
+
 ```sh
 cd bigdish_console
-npm install
-python3 tools/generate_map.py   # once: downloads the map tiles, needs internet
-npm run build
 python3 serve.py                # http://127.0.0.1:8620/
 ```
+
+To rebuild it after changing anything under `bigdish_console/src` (Node 20.19+ needed), and
+commit the result so that stays true:
+
+```sh
+cd bigdish_console
+npm ci
+npm run build
+```
+
+`python3 tools/generate_map.py` regenerates the map image, needed only after changing the
+radius, projection or tile style in `public/config.json`; it is the one step that needs
+internet, and its output is committed too.
 
 It talks to the dish server through `dish_client/bigdish_client.js`, the browser counterpart
 to `bigdish_client.py` beside it. See [its README](./bigdish_console/README.md) for
