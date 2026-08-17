@@ -59,6 +59,13 @@ npm run build
 python3 serve.py            # http://127.0.0.1:8620/
 ```
 
+`dist/` is committed, unusually for build output, so that the console can be served on a
+machine that has no Node toolchain at all — `serve.py` uses nothing outside the Python
+standard library, so a clone plus `python3 serve.py` is enough. It costs little in the
+repository: all but four of the files in `dist/` are byte-identical copies of `public/`, which
+git stores once. The catch is that it can go stale, so **rebuild and commit `dist/` whenever
+you change anything under `src/`**, or the machine serving it will quietly run the old code.
+
 ## Configuration
 
 `public/config.json` holds the dish site location, default server host/port, map radius,

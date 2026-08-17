@@ -1,0 +1,10 @@
+{
+    "projection": "azimuthal_equidistant",
+    "center_latitude": 42.360236,
+    "center_longitude": -71.089694,
+    "radius_miles": 250,
+    "image_size_px": 2048,
+    "meters_per_pixel": 392.90625,
+    "attribution": "\u00a9 OpenStreetMap contributors \u00a9 CARTO",
+    "generated_unix": 1786984060.259688
+}
