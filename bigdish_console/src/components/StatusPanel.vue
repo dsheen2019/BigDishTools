@@ -47,18 +47,18 @@
             <tbody>
                 <tr>
                     <th>ra / dec</th>
-                    <td>{{ formatDeg(store.radec?.ra, 3) }}° <span class="alt">{{ degToHMS(store.radec?.ra ?? NaN) }}</span></td>
-                    <td>{{ formatDeg(store.radec?.dec, 3) }}° <span class="alt">{{ degToDMS(store.radec?.dec ?? NaN) }}</span></td>
+                    <td><span class="figure">{{ formatDeg(store.radec?.ra, 3) }}°</span> <span class="alt">{{ degToHMS(store.radec?.ra ?? NaN) }}</span></td>
+                    <td><span class="figure">{{ formatDeg(store.radec?.dec, 3) }}°</span> <span class="alt">{{ degToDMS(store.radec?.dec ?? NaN) }}</span></td>
                 </tr>
                 <tr>
                     <th>l / b</th>
-                    <td>{{ formatDeg(store.gal?.l, 3) }}°</td>
-                    <td>{{ formatDeg(store.gal?.b, 3) }}°</td>
+                    <td><span class="figure">{{ formatDeg(store.gal?.l, 3) }}°</span></td>
+                    <td><span class="figure">{{ formatDeg(store.gal?.b, 3) }}°</span></td>
                 </tr>
                 <tr v-if="store.power">
                     <th>motors</th>
-                    <td>{{ formatDeg(store.power.az_voltage, 1) }} V {{ formatDeg(store.power.az_current, 2) }} A</td>
-                    <td>{{ formatDeg(store.power.el_voltage, 1) }} V {{ formatDeg(store.power.el_current, 2) }} A</td>
+                    <td><span class="figure-small">{{ formatDeg(store.power.az_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power.az_current, 2) }}</span> A</td>
+                    <td><span class="figure-small">{{ formatDeg(store.power.el_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power.el_current, 2) }}</span> A</td>
                 </tr>
                 <tr v-if="offsetActive">
                     <th>offset</th>
@@ -103,8 +103,11 @@
     .axis-value {
         font-size: 26px;
         font-weight: 600;
-        /* "-90.00" plus the degree sign: the widest either axis can be */
+        /* "-90.00" plus the degree sign: the widest either axis can be. Right aligned, and
+         * since the number of decimals never changes, that pins the decimal point and the
+         * degree sign; only the leading digits grow, leftwards into the reserved space. */
         min-width: 7ch;
+        text-align: right;
     }
 
     .unit {
@@ -118,12 +121,36 @@
         /* "-30.000°/s": the dish can manage 30 degrees a second, so allow the sign, five
          * digits and the unit */
         min-width: 10ch;
+        text-align: right;
     }
 
+    /* Fixed layout, or each column sizes itself to its widest content and the columns shove
+     * each other sideways as the numbers change: ra crossing from 83.633 to 359.633 would
+     * move the whole dec column. The width is spent deliberately instead. */
     .frames {
         width: 100%;
+        table-layout: fixed;
         border-collapse: collapse;
         font-size: 12px;
+    }
+
+    .frames th {
+        width: 5rem;
+    }
+
+    /* A slot wide enough for "-359.633°", right aligned, so the figure ends in the same place
+     * whatever its magnitude and the hms/dms beside it never shifts. */
+    .figure {
+        display: inline-block;
+        min-width: 9ch;
+        text-align: right;
+    }
+
+    /* volts and amps: "-28.5", "-1.23" */
+    .figure-small {
+        display: inline-block;
+        min-width: 5ch;
+        text-align: right;
     }
 
     .frames th {
