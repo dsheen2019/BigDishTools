@@ -28,9 +28,8 @@ specification.
 
 ## Requirements
 
+- radioconda/digital_rf
 - astropy
 - numpy
 - scipy
-- digital rf
 - websockets
-- xarrays and Dask (for ITU models) 
