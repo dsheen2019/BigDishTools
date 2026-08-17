@@ -6,7 +6,7 @@
 #
 ###############################################
 
-from bigdish_client import BigDishClient
+from dish_client.bigdish_client import BigDishClient
 import astropy.units as u
 from astropy.coordinates import SkyCoord, EarthLocation, ICRS, AltAz, get_body
 from astropy.time import Time

@@ -2,37 +2,123 @@
 
 import time
 import json
+import atexit
+import weakref
 import threading
 from websockets.sync.client import connect
 
+
+# Clients that have not been closed yet, held weakly so that registering here never keeps one
+# alive. At interpreter exit each is closed, which hands the server a proper websocket close
+# instead of an abruptly dropped connection, without scripts having to do anything.
+_open_clients = weakref.WeakSet()
+
+
+@atexit.register
+def _close_open_clients():
+    for client in list(_open_clients):
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
 class BigDishClient:
-    def __init__(self, server_host, server_port):
+    def __init__(self, server_host, server_port, response_timeout = 30.0):
         '''
-        get to CONNECTED state only. 
+        get to CONNECTED state only.
 
         User must then authenticate to authenticated state, and request dish control using initialize_connection
+
+        response_timeout -- seconds to wait for a reply before raising TimeoutError. The server
+        answers every request as soon as it receives it, including commands scheduled with
+        executeat (those are acknowledged on receipt, not at execution time), so this only trips
+        if something has actually gone wrong. Pass None to wait indefinitely.
         '''
 
         self.websocket = connect(f"ws://{server_host}:{server_port}")
 
         self.message_id = 0
         self.received_messages = {}
-        self._message_recv_thread_handle = threading.Thread(target = self._message_recv_thread)
+        self.response_timeout = response_timeout
+
+        # Replies land on the receive thread, so every access to received_messages is guarded by
+        # this condition. Waiting on it rather than polling means a reply wakes its caller as
+        # soon as it arrives, instead of on the next tick of a sleep loop.
+        self._response_available = threading.Condition()
+        self._connection_closed = None
+
+        # daemon so that this thread, which sits blocked on the socket until the connection ends,
+        # cannot hold the interpreter open after the script itself has finished or been
+        # interrupted. Without this a Ctrl-C leaves the process wedged in interpreter shutdown,
+        # still answering keepalive pings, so the server goes on believing the script holds
+        # control of the dish.
+        self._message_recv_thread_handle = threading.Thread(target = self._message_recv_thread, daemon = True)
         self._message_recv_thread_handle.start()
 
-    def _message_recv_thread(self):
-        for message in self.websocket:
-            message_decoded = json.loads(message)
-            self.received_messages[message_decoded["id"]] = message_decoded
+        _open_clients.add(self)
 
-    def _wait_for_response(self, id):
-        while True:
+    def _message_recv_thread(self):
+        closed = ConnectionError("connection to the server closed")
+
+        try:
+            for message in self.websocket:
+                message_decoded = json.loads(message)
+                with self._response_available:
+                    self.received_messages[message_decoded["id"]] = message_decoded
+                    self._response_available.notify_all()
+        except Exception as e:
+            closed = e
+        finally:
+            # wake anyone still waiting so they fail straight away rather than sitting out the
+            # full timeout on a connection that is never going to answer
+            with self._response_available:
+                self._connection_closed = closed
+                self._response_available.notify_all()
+
+    def _wait_for_response(self, id, timeout = "default"):
+        if timeout == "default":
+            timeout = self.response_timeout
+
+        with self._response_available:
+            satisfied = self._response_available.wait_for(
+                lambda: id in self.received_messages or self._connection_closed is not None,
+                timeout)
+
             if id in self.received_messages:
-                message = self.received_messages[id]
-                del self.received_messages[id]
-                self.message_id += 1
-                return message
-            time.sleep(0.01)
+                # a reply that already arrived wins over a subsequent disconnect
+                message = self.received_messages.pop(id)
+            elif not satisfied:
+                raise TimeoutError(f"No response to message {id} within {timeout} s.")
+            else:
+                raise ConnectionError(f"Connection closed while waiting for a response to message {id}.") from self._connection_closed
+
+        self.message_id += 1
+        return message
+
+    def close(self):
+        '''
+        Close the connection to the server and let the receive thread finish.
+
+        Safe to call more than once, and called automatically at interpreter exit, so scripts
+        that just run to completion or get interrupted still release dish control promptly.
+        '''
+        _open_clients.discard(self)
+
+        try:
+            self.websocket.close()
+        except Exception:
+            pass
+
+        if self._message_recv_thread_handle is not threading.current_thread():
+            self._message_recv_thread_handle.join(timeout = 2.0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+        return False
 
     def authenticate_connection(self, user, password):
         self.websocket.send(json.dumps({"type": "auth", "id": self.message_id, "user": user, "password": password, "version": "0.1.0"}))

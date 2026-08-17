@@ -1,0 +1,198 @@
+/* Big Dish Console -- instrument-panel look.
+ *
+ * Dark charcoal console with engraved-style condensed labels and monospace readouts;
+ * the map view sits in it as a paper polar chart. Deliberately a different visual
+ * identity from the Nixie-tube web client that lives alongside this app.
+ */
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    src: url("/vendor/fonts/ibm-plex-mono-400.woff2") format("woff2");
+    font-weight: 400;
+}
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    src: url("/vendor/fonts/ibm-plex-mono-600.woff2") format("woff2");
+    font-weight: 600;
+}
+
+@font-face {
+    font-family: "Barlow Condensed";
+    src: url("/vendor/fonts/barlow-condensed-500.woff2") format("woff2");
+    font-weight: 500;
+}
+
+@font-face {
+    font-family: "Barlow Condensed";
+    src: url("/vendor/fonts/barlow-condensed-600.woff2") format("woff2");
+    font-weight: 600;
+}
+
+:root {
+    --bg: #14171c;
+    --panel: #1b2027;
+    --panel-edge: #2c333d;
+    --panel-inset: #10131a;
+    --text: #cfd3d9;
+    --text-strong: #fff;
+    --muted: #838b96;
+    --accent: #3fae94;      /* status, current-position marks on dark ground */
+    --signal: #e0562f;      /* commanded / target marks, stop actions */
+    /* The map's chart paper and the marks inked on it are the same in both themes; they
+     * live as constants in MapView.vue, which is the only thing that draws them. */
+    --danger: #d64545;
+    --button-bg: #242b35;
+    --button-signal-text: #f0b39f;
+    --button-signal-hover: #3a2118;
+    --backdrop: rgba(8, 10, 13, 0.75);
+    --sky-bg: #060a12;      /* the star chart's night sky */
+    --chart-ring-tick: rgba(131, 139, 150, 0.45);
+    --chart-scale: rgba(131, 139, 150, 0.6);   /* the map's elevation quadrant */
+    --track-live: #8cc4ef;                     /* the focused target, off the chart paper */
+    --track-live-dim: rgba(140, 196, 239, 0.55);
+
+    --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --font-data: "IBM Plex Mono", "Courier New", monospace;
+    --font-body: system-ui, sans-serif;
+}
+
+/* Light theme: the same instrument in daylight. Warm greys rather than white, to sit
+ * comfortably beside the map's cream chart paper, and darker accents so the coloured
+ * marks keep their contrast. */
+:root[data-theme="light"] {
+    --bg: #e9e7e1;
+    --panel: #f6f4ef;
+    --panel-edge: #cfcbc1;
+    --panel-inset: #fffdf9;
+    --text: #23272d;
+    --text-strong: #000;
+    --muted: #61686f;
+    --accent: #1c7a66;
+    --signal: #b8461e;
+    --danger: #b3322f;
+    --button-bg: #e5e2da;
+    --button-signal-text: #8f3315;
+    --button-signal-hover: #f3d9cd;
+    --backdrop: rgba(35, 38, 44, 0.45);
+    --sky-bg: #f7f6f2;
+    --chart-ring-tick: rgba(97, 104, 111, 0.5);
+    --chart-scale: rgba(97, 104, 111, 0.7);
+    --track-live: #1f4f7d;
+    --track-live-dim: rgba(31, 79, 125, 0.6);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body, #app {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+}
+
+/* --- shared panel chrome --- */
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    padding: 10px 12px 12px;
+}
+
+.panel-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.data {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+}
+
+label {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+input[type="text"], input[type="password"], input[type="number"], select {
+    font-family: var(--font-data);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--panel-inset);
+    border: 1px solid var(--panel-edge);
+    border-radius: 4px;
+    padding: 5px 7px;
+    width: 100%;
+}
+
+input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+button {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text);
+    background: var(--button-bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--text-strong);
+}
+
+button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+button.signal {
+    border-color: var(--signal);
+    color: var(--button-signal-text);
+}
+
+button.signal:hover:not(:disabled) {
+    background: var(--button-signal-hover);
+    color: var(--text-strong);
+}
+
+.error-text {
+    color: var(--danger);
+    font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}
