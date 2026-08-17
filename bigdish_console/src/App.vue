@@ -102,9 +102,29 @@
                 if (d.success !== false) {
                     // the server sends "command"; protocol.md says "active_command" -- accept both
                     store.activeCommand = d.command ?? d.active_command ?? null;
+                    updateCommandedFromTrack();
                 }
             } catch { /* transient */ }
         }, 1000);
+    }
+
+    // Where the dish has been told to point, when that is a moving point on the sky. A
+    // server-side track carries no az/el of its own -- it names a celestial coordinate and the
+    // server follows it -- so without this the commanded marks stay wherever the last az/el
+    // command left them, pointing at nothing, for the whole track. Recomputed each poll, which
+    // is ample: the sky moves a degree every four minutes.
+    function updateCommandedFromTrack() {
+        const command = store.activeCommand;
+        if (command?.type !== 'track' || store.strobe?.active) {
+            return;
+        }
+        const frame = command.coords === 'gal' ? 'gal' : 'radec';
+        const [coord1, coord2] = frame === 'gal'
+            ? [command.l_pos, command.b_pos]
+            : [command.ra_pos, command.dec_pos];
+        if (Number.isFinite(coord1) && Number.isFinite(coord2)) {
+            store.commandedAzEl = fixedFrameAzEl(frame, coord1, coord2, config.site, new Date());
+        }
     }
 
     function readable() {
@@ -332,8 +352,18 @@
             }
             if (!response.success) {
                 store.lastError = response.reason || `${command.action} command failed.`;
+            } else if (command.action === 'stow' || command.action === 'service') {
+                // fixed positions the server knows and we do not, so they come from the config
+                const position = command.action === 'stow'
+                    ? config.dish.stow_azel : config.dish.service_azel;
+                store.commandedAzEl = position ? { az: position[0], el: position[1] } : null;
             } else if (command.frame === 'azel') {
                 store.commandedAzEl = { az: command.coord1, el: command.coord2 };
+            } else {
+                // a sky frame: the server does the conversion, so do the same one here rather
+                // than leaving the marks pointing where the previous command went
+                store.commandedAzEl = fixedFrameAzEl(
+                    command.frame, command.coord1, command.coord2, config.site, new Date());
             }
         } catch (error) {
             store.lastError = error.message;

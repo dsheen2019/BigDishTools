@@ -21,7 +21,9 @@
         }
     },
     "dish": {
-        "beamwidth_deg": 2.7
+        "beamwidth_deg": 2.7,
+        "stow_azel": [60.0, 30.0],
+        "service_azel": [60.0, 0.0]
     },
     "status_poll_hz": 5,
     "strobe": {
