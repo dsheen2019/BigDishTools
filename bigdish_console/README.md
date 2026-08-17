@@ -68,9 +68,17 @@ you change anything under `src/`**, or the machine serving it will quietly run t
 
 ## Configuration
 
-`public/config.json` holds the dish site location, default server host/port, map radius,
-projection and tile style, dish beamwidth (for the beam wedge on the map), strobe cadences,
-and the target list. Target types:
+`config.json` holds the dish site location, default server host/port, map radius, projection
+and tile style, dish beamwidth (for the beam wedge on the map), strobe cadences, and the
+target list.
+
+It sits beside `serve.py` rather than in `public/`, so the build does not copy it and there is
+only ever one of it: editing it takes effect on a browser reload, with nothing rebuilt and
+nothing restarted. `python3 serve.py --config other.json` serves a different one — useful for
+a second site or a cut-down target list — and `BIGDISH_CONSOLE_CONFIG=other.json npm run dev`
+does the same in development.
+
+Target types:
 
 - `fixed` — ra/dec or galactic coordinates; tracked by the server itself.
 - `station` — a ground station by lat/lon; becomes a map marker and an az/el goto at its
