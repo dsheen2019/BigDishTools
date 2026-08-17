@@ -1,0 +1,146 @@
+# Big Dish console configuration.
+#
+# Everything the console needs to know that is not about the code: where the dish is, where
+# its server is, what the map covers, and what you might want to point at. Edited and reread
+# on a browser reload -- nothing here needs a rebuild, and nothing needs the server restarted.
+#
+# serve.py --config other.toml serves a different one, for a second site or a shorter target
+# list. A .json file still works, if you would rather have one.
+
+# How often to ask the server where the dish is pointing.
+status_poll_hz = 5
+
+# How long a satellite's TLE may be cached before fetching a fresh one from CelesTrak.
+tle_max_age_hours = 6
+
+# The dish control server the login box offers by default.
+[server]
+host = "172.25.15.11"
+port = 1234
+
+# Where the dish is. Used for every coordinate conversion the console does itself: sun and
+# moon positions, satellite look angles, and the sky paths drawn over both charts.
+[site]
+name = "W1XM Big Dish"
+latitude = 42.360236       # degrees north
+longitude = -71.089694     # degrees east, so negative for the western hemisphere
+altitude_m = 100
+
+[map]
+# "azimuthal_equidistant" makes the chart a true polar plot about the dish: pixel radius is
+# ground range and pixel angle is true bearing, so the range rings are honest and azimuth
+# needles are straight. "webmercator" leaves the tiles as downloaded.
+projection = "azimuthal_equidistant"
+radius_miles = 250
+image_size_px = 2048
+tile_url = "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+attribution = "© OpenStreetMap contributors © CARTO"
+
+# Changing any of the four settings above means running tools/generate_map.py again, which is
+# the one thing here that needs internet. The rest take effect on a reload.
+
+# How far ahead to look for a target's next pass, and the cap on how finely to sample the
+# path that gets drawn. A circumpolar source gets max_hours of its circle.
+[map.sky_track]
+max_hours = 24
+max_points = 500
+
+[dish]
+beamwidth_deg = 2.7            # sets the width of the beam wedge on the map
+stow_azel = [60.0, 30.0]       # where the server parks the dish; see protocol.md
+service_azel = [60.0, 0.0]
+
+# Targets the server cannot track itself -- solar system bodies and satellites -- are followed
+# by the console instead, which recomputes az/el and sends it repeatedly. compute_interval_s is
+# how often to work out an accurate position, command_interval_s how often to send one,
+# extrapolating in between.
+[strobe]
+compute_interval_s = 5.0
+command_interval_s = 0.2
+
+# --- targets ------------------------------------------------------------------------------
+#
+# Each [[targets]] block adds one entry to the dropdown. Four kinds:
+#
+#   body      a solar system body by name, as astronomy-engine knows it
+#   fixed     a fixed celestial coordinate, frame = "radec" or "gal", in degrees
+#   station   a place on the ground by latitude and longitude; also drawn on the map
+#   satellite a NORAD catalog number, fetched from CelesTrak and propagated with SGP4
+#
+# Order here is the order in the dropdown, within the group each kind belongs to.
+
+[[targets]]
+type = "body"
+name = "Sun"
+body = "Sun"
+
+[[targets]]
+type = "body"
+name = "Moon"
+body = "Moon"
+
+[[targets]]
+type = "body"
+name = "Venus"
+body = "Venus"
+
+[[targets]]
+type = "body"
+name = "Mars"
+body = "Mars"
+
+[[targets]]
+type = "body"
+name = "Jupiter"
+body = "Jupiter"
+
+[[targets]]
+type = "body"
+name = "Saturn"
+body = "Saturn"
+
+[[targets]]
+type = "fixed"
+name = "Crab Nebula (Tau A)"
+frame = "radec"
+coord1 = 83.633      # right ascension in degrees, not hours
+coord2 = 22.0145     # declination
+
+[[targets]]
+type = "fixed"
+name = "Cas A"
+frame = "radec"
+coord1 = 350.85
+coord2 = 58.815
+
+[[targets]]
+type = "fixed"
+name = "Cyg A"
+frame = "radec"
+coord1 = 299.868
+coord2 = 40.734
+
+[[targets]]
+type = "fixed"
+name = "Vir A (M87)"
+frame = "radec"
+coord1 = 187.706
+coord2 = 12.391
+
+[[targets]]
+type = "fixed"
+name = "Galactic Center"
+frame = "gal"
+coord1 = 0.0         # galactic longitude
+coord2 = 0.0         # galactic latitude
+
+[[targets]]
+type = "station"
+name = "W1AW (Newington CT)"
+latitude = 41.7147
+longitude = -72.7272
+
+[[targets]]
+type = "satellite"
+name = "ISS"
+catnr = 25544

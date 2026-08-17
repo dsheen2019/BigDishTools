@@ -68,15 +68,21 @@ you change anything under `src/`**, or the machine serving it will quietly run t
 
 ## Configuration
 
-`config.json` holds the dish site location, default server host/port, map radius, projection
+`config.toml` holds the dish site location, default server host/port, map radius, projection
 and tile style, dish beamwidth (for the beam wedge on the map), strobe cadences, and the
-target list.
+target list. It is TOML so that it can carry comments explaining each of those, and it is
+commented; the browser is handed JSON, converted by whichever server is running.
 
 It sits beside `serve.py` rather than in `public/`, so the build does not copy it and there is
 only ever one of it: editing it takes effect on a browser reload, with nothing rebuilt and
-nothing restarted. `python3 serve.py --config other.json` serves a different one — useful for
-a second site or a cut-down target list — and `BIGDISH_CONSOLE_CONFIG=other.json npm run dev`
-does the same in development.
+nothing restarted. `python3 serve.py --config other.toml` serves a different one — useful for
+a second site or a cut-down target list — and `BIGDISH_CONSOLE_CONFIG=other.toml npm run dev`
+does the same in development. A `.json` file is still read as JSON, if you would rather keep
+one.
+
+Reading TOML needs Python 3.11 or newer for `tomllib` — Debian 12 and Raspberry Pi OS
+bookworm both ship it. On an older Python, `pip install tomli` is enough, and `serve.py` says
+so if it comes to it.
 
 Target types:
 

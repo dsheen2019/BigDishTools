@@ -9,16 +9,18 @@ briefly offline.
 
 The config is served from a file of its own rather than from the build output, so there is
 one copy of it and it can be edited, or swapped for another with --config, without rebuilding
-anything.
+anything. It is TOML, so it can carry comments; the browser is still handed JSON, converted
+here. A .json file is read as JSON, for anyone who prefers one.
 
 Usage:
     npm run build          # once, after changing the app
-    python3 serve.py [--port 8620] [--config config.json]
+    python3 serve.py [--port 8620] [--config config.toml]
 '''
 
 import argparse
 import http.server
 import json
+import sys
 import re
 import time
 import urllib.parse
@@ -27,7 +29,28 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 DIST_DIR = APP_DIR / "dist"
-DEFAULT_CONFIG = APP_DIR / "config.json"
+DEFAULT_CONFIG = APP_DIR / "config.toml"
+
+# tomllib is standard from Python 3.11. Debian 12 and Raspberry Pi OS bookworm ship 3.11, but
+# 3.10 is still about, so fall back to tomli and say something useful if neither is there.
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+
+def read_config(path):
+    """The configuration as a dict, from TOML or, if it is named .json, from JSON."""
+    if path.suffix == ".json":
+        return json.loads(path.read_bytes())
+    if tomllib is None:
+        raise SystemExit(
+            f"Reading {path.name} needs TOML support: run this with python3.11 or newer, "
+            "or `pip install tomli`, or point --config at a .json file.")
+    return tomllib.loads(path.read_text(encoding="utf-8"))
 CACHE_DIR = APP_DIR / ".tle_cache"
 TLE_MAX_AGE_S = 6 * 3600
 CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=TLE"
@@ -58,13 +81,14 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         with nothing rebuilt and nothing restarted.
         """
         try:
-            body = self.config_path.read_bytes()
-            json.loads(body)  # fail here, with a message, rather than in the browser
+            # parsed here, and handed to the browser as JSON, so a mistake in the file is
+            # reported against the file rather than surfacing as a broken page
+            body = json.dumps(read_config(self.config_path)).encode()
         except FileNotFoundError:
             self.send_error(404, f"No configuration file at {self.config_path}")
             return
-        except json.JSONDecodeError as e:
-            self.send_error(500, f"{self.config_path} is not valid JSON: {e}")
+        except Exception as e:
+            self.send_error(500, f"{self.config_path} could not be read: {e}")
             return
 
         self.send_response(200)
@@ -120,6 +144,12 @@ def main():
         raise SystemExit("dist/ not found -- run `npm run build` first (see README.md).")
     if not args.config.is_file():
         raise SystemExit(f"No configuration file at {args.config.absolute()}.")
+    try:
+        read_config(args.config)  # fail now, not on the first page load
+    except Exception as e:
+        # an operator's typo in their own config file, so say what is wrong with it rather
+        # than printing a stack trace of the parser
+        raise SystemExit(f"{args.config.absolute()} could not be read: {e}")
 
     ConsoleHandler.config_path = args.config.resolve()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), ConsoleHandler)

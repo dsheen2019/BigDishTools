@@ -4,25 +4,30 @@ import { readFileSync } from 'node:fs'
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { parse as parseToml } from 'smol-toml'
 
-// config.json deliberately does not live in public/, so that the build does not copy it into
+// The config deliberately does not live in public/, so that the build does not copy it into
 // dist/ and leave two copies -- the one that gets edited and the one that gets served. In
-// production serve.py serves it; in development this does, from the same file, so the two
-// behave alike. BIGDISH_CONSOLE_CONFIG picks a different one, as --config does for serve.py.
+// production serve.py serves it; in development this does, from the same file and with the
+// same TOML-to-JSON conversion, so the two behave alike. BIGDISH_CONSOLE_CONFIG picks a
+// different file, as --config does for serve.py.
 function serveConfig() {
     const path = fileURLToPath(new URL(
-        process.env.BIGDISH_CONSOLE_CONFIG ?? './config.json', import.meta.url))
+        process.env.BIGDISH_CONSOLE_CONFIG ?? './config.toml', import.meta.url))
     return {
         name: 'bigdish-console-config',
         configureServer(server) {
             server.middlewares.use('/config.json', (request, response) => {
                 try {
-                    // read per request, so an edit needs only a browser reload
-                    const body = readFileSync(path)
-                    JSON.parse(body)
+                    // read per request, so an edit needs only a browser reload. The file is
+                    // TOML so it can carry comments; the browser gets JSON either way, the
+                    // same conversion serve.py does in production.
+                    const text = readFileSync(path, 'utf8')
+                    const config = path.endsWith('.json')
+                        ? JSON.parse(text) : parseToml(text)
                     response.setHeader('Content-Type', 'application/json')
                     response.setHeader('Cache-Control', 'no-store')
-                    response.end(body)
+                    response.end(JSON.stringify(config))
                 } catch (error) {
                     response.statusCode = error.code === 'ENOENT' ? 404 : 500
                     response.end(`${path}: ${error.message}`)
