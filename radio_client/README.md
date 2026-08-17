@@ -7,7 +7,13 @@ pip install -e ./radio_client
 ```
 
 Then `from radio_command_client import RadioZmqClient` works from any directory, with no
-need to put this folder on `sys.path`. Only pyzmq is declared as a dependency: `pmt` and
+need to put this folder on `sys.path`, and the command runner is on the PATH as
+`run-radio-commands`, so a scheduled command file can be run from wherever it lives:
+
+```sh
+run-radio-commands path/to/commands.csv
+```
+ Only pyzmq is declared as a dependency: `pmt` and
 `digital_rf` come from GNU Radio and are part of the radioconda environment these tools run
 in, rather than being installable from PyPI.
 

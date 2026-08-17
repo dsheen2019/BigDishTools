@@ -42,6 +42,9 @@ specification.
   pip install -e ./radio_client
   ```
 
+  This also puts `run-radio-commands` on the PATH, for running a scheduled csv of radio
+  commands.
+
 - radioconda/digital_rf
 - astropy
 - numpy

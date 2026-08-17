@@ -19,6 +19,10 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["pyzmq"]
 
+[project.scripts]
+# so a scheduled command file can be run by name from wherever it happens to live
+run-radio-commands = "run_radio_commands:main"
+
 [tool.setuptools]
 # flat modules, so `from radio_command_client import RadioZmqClient` keeps working unchanged
 py-modules = ["radio_command_client", "run_radio_commands"]
