@@ -4,29 +4,9 @@
     import { isZeroOffset, describeOffset } from '../lib/offset.js';
 
     const props = defineProps(['store']);
-    const emit = defineEmits(['cancel-file']);
 
     const offsetActive = computed(() => !isZeroOffset(props.store.offset));
 
-    const activeCommandText = computed(() => {
-        const command = props.store.activeCommand;
-        if (props.store.strobe?.active) {
-            const s = props.store.strobe;
-            const where = s.az !== null ? ` at az ${formatDeg(s.az, 1)}° el ${formatDeg(s.el, 1)}°` : '';
-            return s.up === false
-                ? `${s.name} is below the horizon${where}; waiting for it to rise.`
-                : `Tracking ${s.name}${where} (console-computed).`;
-        }
-        if (!command) {
-            return 'No movement command running.';
-        }
-        if (command.type === 'track') {
-            const endsAt = (command.executeat ?? 0) + (command.duration ?? 0);
-            const remaining = Math.max(0, Math.round(endsAt - Date.now() / 1000));
-            return `Server tracking (${command.coords}), ${remaining} s remaining.`;
-        }
-        return `Running ${command.type} (${command.coords ?? ''}).`;
-    });
 </script>
 
 <template>
@@ -69,23 +49,22 @@
                 </tr>
             </tbody>
         </table>
-        <p class="active-command reserve-2">{{ activeCommandText }}</p>
-        <!-- live state only: a file that has run its course belongs in the utilities tab,
-             not sitting in the sidebar afterwards. A failure stays, since it wants attention.
-             The line keeps its space either way, which is the whole point of queueing a file
-             hours ahead: the sidebar should not rearrange itself when it comes due. -->
-        <p class="schedule reserve-2"
+        <!-- A glance at what is queued and nothing more: which file, how long until it starts
+             or how far through it is. The whole state, and the buttons for doing anything
+             about it, are in the utilities tab. Live state only -- a file that has run its
+             course belongs there too, not sitting here afterwards; a failure stays, since it
+             wants attention. The line keeps its space either way, which is the point of
+             queueing a file hours ahead: nothing should shift when it comes due. -->
+        <p class="schedule reserve-1"
            :class="{ hidden: !['queued', 'running', 'failed'].includes(store.schedule?.state) }">
-            <span :class="store.schedule?.state === 'running' ? 'running' : ''">{{ store.schedule?.text }}</span>
-            <button v-if="['queued', 'running'].includes(store.schedule?.state)"
-                    class="signal small" @click="emit('cancel-file')">Cancel</button>
+            <span class="one-line" :title="store.schedule?.text"
+                  :class="store.schedule?.state === 'running' ? 'running' : ''">{{ store.schedule?.summary }}</span>
         </p>
-        <!-- Two lines held for whatever goes wrong. A longer message scrolls inside them
-             rather than growing the panel, since an error is exactly the moment you are
-             reaching for a button somewhere else. -->
-        <div class="messages reserve-2">
-            <p v-if="store.strobe && !store.strobe.active && store.strobe.error" class="error-text">{{ store.strobe.error }}</p>
-            <p v-if="store.lastError" class="error-text">{{ store.lastError }}</p>
+        <!-- one line held for whatever goes wrong; the full text is in the tooltip -->
+        <div class="messages reserve-1">
+            <p v-if="store.strobe && !store.strobe.active && store.strobe.error"
+               class="error-text one-line" :title="store.strobe.error">{{ store.strobe.error }}</p>
+            <p v-else-if="store.lastError" class="error-text one-line" :title="store.lastError">{{ store.lastError }}</p>
         </div>
     </div>
 </template>
@@ -202,27 +181,20 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        /* so the ellipsis happens inside the line rather than the line growing */
+        min-width: 0;
+    }
+
+    .schedule span {
+        min-width: 0;
     }
 
     .schedule .running {
         color: var(--signal);
     }
 
-    .schedule button.small {
-        font-size: 11px;
-        padding: 2px 8px;
-    }
-
-    .active-command {
-        margin: 10px 0 0;
-        font-size: 12px;
-        color: var(--muted);
-    }
-
     .messages {
-        margin-top: 6px;
-        overflow-y: auto;
-        max-height: 2.8em;
+        margin-top: 10px;
     }
 
     .messages p {

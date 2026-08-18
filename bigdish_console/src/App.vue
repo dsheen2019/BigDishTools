@@ -365,7 +365,20 @@
             lastRequest = null;
         },
         onState: () => {
-            store.schedule = { state: schedule.state, text: schedule.describe() };
+            // summary for the sidebar's one line; the rest for the utilities panel, which
+            // shows the queue in full and is where it can be cancelled
+            store.schedule = {
+                state: schedule.state,
+                summary: schedule.summarise(),
+                text: schedule.describe(),
+                name: schedule.file?.name ?? '',
+                startsAt: schedule.startsAt,
+                endsAt: schedule.endsAt,
+                sent: schedule.sent,
+                skipped: schedule.skipped,
+                total: schedule.file?.rows.length ?? 0,
+                message: schedule.message,
+            };
             // the diagnostics error plot should measure against the file while it runs
             if (schedule.state !== 'running') return;
             const row = schedule.file?.rows[Math.max(0, schedule.sent - 1)];
@@ -486,7 +499,10 @@
             }
             if (!response.success) {
                 store.lastError = response.reason || `${command.action} command failed.`;
-            } else if (command.action === 'stow' || command.action === 'service') {
+                return;
+            }
+
+            if (command.action === 'stow' || command.action === 'service') {
                 // fixed positions the server knows and we do not, so they come from the config
                 const position = command.action === 'stow'
                     ? config.dish.stow_azel : config.dish.service_azel;
@@ -563,7 +579,7 @@
 
         <main>
             <aside>
-                <StatusPanel :store="store" @cancel-file="cancelFile" />
+                <StatusPanel :store="store" />
                 <CommandPanel :store="store" :entry="entry" @command="sendCommand" />
                 <TargetPanel :store="store" :targets="targets" :config="config"
                              @command="sendCommand" @start-strobe="trackTarget" @stop-strobe="stopStrobe" />

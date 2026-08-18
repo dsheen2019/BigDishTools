@@ -52,31 +52,33 @@
                 <option v-for="(f, key) in FRAMES" :key="key" :value="key">{{ f.label }}</option>
             </select>
         </div>
-        <div class="row">
+        <!-- the two coordinates are one thing, and read as one: side by side, in the order
+             they are always said in -->
+        <div class="row coords">
             <label :for="'cmd-c1'">{{ frame.c1 }}</label>
             <input id="cmd-c1" type="text" v-model="entry.coord1" :placeholder="frame.hint" @keyup.enter="goto_" />
-        </div>
-        <div class="row">
-            <label :for="'cmd-c2'">{{ frame.c2 }}</label>
+            <label :for="'cmd-c2'" class="second">{{ frame.c2 }}</label>
             <input id="cmd-c2" type="text" v-model="entry.coord2" :placeholder="'degrees'" @keyup.enter="goto_" />
         </div>
-        <!-- kept for the frames that cannot be tracked, so switching frame does not move
-             everything below this panel up and down -->
-        <div class="row" :class="{ hidden: !frame.track }">
+        <!-- greyed out for the frames that cannot be tracked, rather than taken away:
+             switching frame should not move everything below this panel -->
+        <div class="row">
             <label for="cmd-duration">Track for</label>
             <div class="duration">
-                <input id="cmd-duration" type="number" min="1" v-model="duration" />
+                <input id="cmd-duration" type="number" min="1" v-model="duration"
+                       :disabled="!frame.track" />
                 <span class="data seconds">s</span>
             </div>
         </div>
         <div class="buttons">
             <button :disabled="!canMove" @click="goto_">Go to</button>
-            <button v-if="frame.track" :disabled="!canMove" @click="track">Track</button>
+            <button :disabled="!canMove || !frame.track" @click="track">Track</button>
         </div>
-        <!-- two lines held for whichever applies -->
-        <div class="messages reserve-2">
-            <p v-if="parseError" class="error-text">{{ parseError }}</p>
-            <p v-else-if="!canMove" class="hint">Connect with control to move the dish. Clicking the map or sky fills these fields.</p>
+        <!-- one line, which is all either of these needs; a longer one ellipsises rather
+             than pushing the panels below it down -->
+        <div class="messages reserve-1">
+            <p v-if="parseError" class="error-text one-line" :title="parseError">{{ parseError }}</p>
+            <p v-else-if="!canMove" class="hint one-line">Connect with control to move the dish.</p>
         </div>
     </div>
 </template>
@@ -88,6 +90,16 @@
         gap: 8px;
         align-items: center;
         margin-bottom: 7px;
+    }
+
+    /* first label column matches the rows above it so the fields line up; the second takes
+     * what its label needs, since "dec" and "el" are not the same width */
+    .coords {
+        grid-template-columns: 80px 1fr auto 1fr;
+    }
+
+    .coords .second {
+        padding-left: 8px;
     }
 
     .duration {

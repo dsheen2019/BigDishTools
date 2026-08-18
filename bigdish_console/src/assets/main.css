@@ -210,14 +210,21 @@ button.signal:hover:not(:disabled) {
  * browser's "normal" varies with the font and the reserve is off by a few pixels a line.
  * .hidden keeps a block's space while taking it out of sight, for the ones that would
  * otherwise be shown empty. */
-.reserve-1, .reserve-2, .reserve-3, .reserve-4 { line-height: 1.4; }
+.reserve-1, .reserve-2 { line-height: 1.4; }
 .reserve-1 { min-height: 1.4em; }
 .reserve-2 { min-height: 2.8em; }
-.reserve-3 { min-height: 4.2em; }
-.reserve-4 { min-height: 5.6em; }
 
 .hidden {
     visibility: hidden;
+}
+
+/* For text in a one-line slot: rather than wrap and push everything below it down, a long
+ * one is cut off with an ellipsis. Anything that can be cut carries the whole of itself in
+ * a title attribute, so it is a hover away. */
+.one-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 @media (prefers-reduced-motion: reduce) {

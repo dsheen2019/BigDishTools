@@ -25,6 +25,12 @@
     const strobeActiveHere = computed(() =>
         props.store.strobe?.active && props.store.strobe.name === selectedName.value);
 
+    // what the selected target supports, which decides what is greyed out rather than what
+    // is on show: a station has a position but no track, a satellite the reverse
+    const hasFixedPosition = computed(() => ['goto', 'track'].includes(selected.value?.kind));
+    const canTrack = computed(() => selected.value?.kind === 'track');
+    const canStrobe = computed(() => selected.value?.kind === 'strobe');
+
     // Live az/el preview for targets the console computes itself. Satellites need their
     // TLE first; it is fetched (and cached) as soon as one is selected.
     let previewTimer = null;
@@ -132,24 +138,21 @@
              a fetch failure where a satellite's would be -->
         <p class="preview data reserve-2">{{ preview }}</p>
 
-        <!-- The duration row and the buttons are always here, hidden rather than removed for
-             the targets they do not apply to. Only some kinds of target can be tracked for a
-             time, and the panel is above the offset and the users list, which have no business
-             moving because somebody looked at a different target. -->
-        <div class="row" :class="{ hidden: selected?.kind !== 'track' }">
+        <!-- Every control the panel has, always in the same place: what a given target does
+             not support is greyed out rather than taken away. A control that vanishes moves
+             everything under it and leaves you wondering whether you imagined it. -->
+        <div class="row">
             <label for="target-duration">Track for</label>
-            <input id="target-duration" type="number" min="1" v-model="duration" />
+            <input id="target-duration" type="number" min="1" v-model="duration"
+                   :disabled="!canTrack" />
             <span class="data seconds">s</span>
         </div>
-        <div class="buttons" :class="{ hidden: !selected }">
-            <template v-if="selected?.kind === 'strobe'">
-                <button v-if="!strobeActiveHere" :disabled="!canMove" @click="emit('start-strobe', selected)">Track continuously</button>
-                <button v-else class="signal" @click="emit('stop-strobe')">Stop tracking</button>
-            </template>
-            <template v-else>
-                <button :disabled="!canMove" @click="goto_">Go to</button>
-                <button v-if="selected?.kind === 'track'" :disabled="!canMove" @click="track">Track</button>
-            </template>
+        <div class="buttons">
+            <button :disabled="!canMove || !hasFixedPosition" @click="goto_">Go to</button>
+            <button :disabled="!canMove || !canTrack" @click="track">Track</button>
+            <button v-if="!strobeActiveHere" :disabled="!canMove || !canStrobe"
+                    @click="emit('start-strobe', selected)">Track continuously</button>
+            <button v-else class="signal" @click="emit('stop-strobe')">Stop tracking</button>
         </div>
     </div>
 </template>

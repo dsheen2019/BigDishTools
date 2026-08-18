@@ -92,43 +92,38 @@
                 <option v-for="(f, key) in OFFSET_FRAMES" :key="key" :value="key">{{ f.label }}</option>
             </select>
         </div>
-        <div class="row">
+        <div class="row coords">
             <label for="offset-c1">{{ labels.c1 }}</label>
             <input id="offset-c1" type="text" v-model="first" placeholder="degrees" @keyup.enter="apply" />
-        </div>
-        <div class="row">
-            <label for="offset-c2">{{ labels.c2 }}</label>
+            <label for="offset-c2" class="second">{{ labels.c2 }}</label>
             <input id="offset-c2" type="text" v-model="second" placeholder="degrees" @keyup.enter="apply" />
         </div>
         <div class="buttons">
             <button @click="apply">Apply</button>
-            <button v-if="active" class="signal" @click="clear">Clear</button>
+            <button class="signal" :disabled="!active" @click="clear">Clear</button>
         </div>
-        <!-- one line for whichever of these has something to say: the error while an entry is
-             being typed, the beam placement once one is applied -->
+        <!-- One line for whichever of these has something to say: the error while an entry is
+             being typed, the beam placement once one is applied. The panel was near enough a
+             fixed height before and stays that way -- the notes are written short enough to
+             fit a line rather than the line being stretched to fit them. -->
         <div class="reserve-1">
-            <p v-if="parseError" class="error-text">{{ parseError }}</p>
-            <p v-else-if="beamPlacement" class="hint data">
-                Beam is {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
+            <p v-if="parseError" class="error-text one-line" :title="parseError">{{ parseError }}</p>
+            <p v-else-if="beamPlacement" class="hint data one-line">
+                {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
                 az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
             </p>
         </div>
-        <!-- three lines, being the longest of the notes below plus the strobe warning -->
-        <p class="hint reserve-3">
+        <p class="hint reserve-1 one-line">
             <template v-if="active && store.offset.frame === 'track'">
-                Δ∥ leads the target along its path, Δ⊥ steps across it, both in true on-sky
-                degrees ({{ formatDeg(separation, 2) }}° total).
+                Δ∥ along the track, Δ⊥ across it: {{ formatDeg(separation, 2) }}° on sky.
             </template>
             <template v-else-if="active && separation !== null">
-                Beam moves {{ formatDeg(separation, 2) }}° on sky from the current pointing.
+                Beam moves {{ formatDeg(separation, 2) }}° on sky.
             </template>
             <template v-else-if="active">Applied to commanded coordinates.</template>
             <template v-else-if="tracking">Applying re-points what is tracking now.</template>
             <template v-else>Added to every pointing command until cleared.</template>
-            <template v-if="strobeWarning">
-                This offset does not stay put on the sky, so the console will take over
-                tracking from the server.
-            </template>
+            <template v-if="strobeWarning"> Console will take over tracking.</template>
         </p>
     </div>
 </template>
@@ -140,6 +135,15 @@
         gap: 8px;
         align-items: center;
         margin-bottom: 7px;
+    }
+
+    /* both offsets on one line, in the order the frame names them */
+    .coords {
+        grid-template-columns: 80px 1fr auto 1fr;
+    }
+
+    .coords .second {
+        padding-left: 8px;
     }
 
     .badge {

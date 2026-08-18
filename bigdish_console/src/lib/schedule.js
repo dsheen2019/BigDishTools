@@ -154,6 +154,23 @@ export class Schedule {
         }
     }
 
+    // One line for the sidebar, which has room for a glance and not for a report: which file
+    // and how far along. The full state, and the buttons for doing anything about it, live in
+    // the utilities tab.
+    summarise() {
+        const now = Date.now() / 1000;
+        switch (this.state) {
+            case "queued":
+                return `${this.file.name} in ${formatWait(Math.max(0, this.startsAt - now))}`;
+            case "running":
+                return `${this.file.name} row ${this.sent} of ${this.file.rows.length}`;
+            case "failed":
+                return `${this.file?.name ?? "Pointing file"}: ${this.message}`;
+            default:
+                return "";
+        }
+    }
+
     describe() {
         const now = Date.now() / 1000;
         switch (this.state) {

@@ -20,6 +20,24 @@
     const pointingError = ref('');
     const pointingState = computed(() => props.store.schedule?.state ?? 'idle');
 
+    // The file the dish has been committed to, which is not necessarily the one being looked
+    // at: browsing another does not disturb it. Kept until it is queued over, so the outcome
+    // of the last one is still readable here after it has left the sidebar.
+    const queued = computed(() =>
+        props.store.schedule?.state && props.store.schedule.state !== 'idle'
+            ? props.store.schedule : null);
+
+    const QUEUE_TITLES = {
+        queued: 'Queued', running: 'Running now', finished: 'Finished',
+        cancelled: 'Cancelled', failed: 'Failed',
+    };
+    const queueTitle = computed(() => QUEUE_TITLES[queued.value?.state] ?? 'Queue');
+
+    // recomputed whenever the schedule ticks, which is what makes the countdown move
+    const queueCountdown = computed(() => queued.value?.state === 'queued'
+        ? formatWait(Math.max(0, queued.value.startsAt - Date.now() / 1000))
+        : '');
+
     async function readPointingFile(event) {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -119,18 +137,40 @@
                     past and would be sent with a time that has gone.
                 </p>
                 <p v-else class="hint reserve-1">{{ startsIn }}; the pointing offset is zeroed then.</p>
-                <div class="row buttons">
-                    <button :disabled="store.state !== 'INITIALIZED' || pointingState === 'queued'
-                                || pointingState === 'running'"
-                            @click="emit('queue-file', pointing)">Queue</button>
-                    <button v-if="['queued', 'running'].includes(pointingState)" class="signal"
-                            @click="emit('cancel-file')">Cancel</button>
-                    <!-- for the file that was not the one you meant to open. Only before it is
-                         handed over: once queued, the thing to press is Cancel. -->
-                    <button v-else @click="clearPointing">Clear</button>
-                </div>
             </template>
-            <p v-if="store.schedule?.text" class="hint data">{{ store.schedule.text }}</p>
+            <!-- These two are about the file being looked at, and are here whether or not one
+                 is: greyed out until there is something to queue or clear. The queue below
+                 has its own Cancel. -->
+            <div class="row buttons">
+                <button :disabled="!pointing || store.state !== 'INITIALIZED'
+                            || ['queued', 'running'].includes(pointingState)"
+                        @click="emit('queue-file', pointing)">Queue</button>
+                <button :disabled="!pointing && !pointingError" @click="clearPointing">Clear</button>
+            </div>
+
+            <!-- The queue in full, which is what the sidebar's one line points at. Shown from
+                 the moment a file is handed over until it is done, whatever gets browsed in
+                 the meantime, since this is the only place that says what the dish has been
+                 committed to and the only place it can be taken back. -->
+            <div v-if="queued" class="queued">
+                <h3>{{ queueTitle }}</h3>
+                <table class="frames data summary">
+                    <tbody>
+                        <tr><th>file</th><td class="one-line" :title="queued.name">{{ queued.name }}</td></tr>
+                        <tr><th>starts</th><td>{{ clock(queued.startsAt) }}</td></tr>
+                        <tr><th>ends</th><td>{{ clock(queued.endsAt) }}</td></tr>
+                        <tr v-if="queueCountdown"><th>in</th><td>{{ queueCountdown }}</td></tr>
+                        <tr v-else><th>sent</th><td>{{ queued.sent }} of {{ queued.total }}</td></tr>
+                        <tr v-if="queued.skipped"><th>skipped</th><td>{{ queued.skipped }} stale</td></tr>
+                    </tbody>
+                </table>
+                <p v-if="queued.message" :class="queued.state === 'failed' ? 'error-text' : 'hint'">
+                    {{ queued.message }}</p>
+                <div class="row buttons">
+                    <button class="signal" :disabled="!['queued', 'running'].includes(queued.state)"
+                            @click="emit('cancel-file')">Cancel</button>
+                </div>
+            </div>
         </div>
 
         <!-- under the pointing file, being the other thing you hand the console from disk -->
@@ -248,6 +288,23 @@
 
     .summary th {
         width: 5.5rem;
+    }
+
+    /* the queue, kept visibly apart from the file being browsed above it */
+    .queued {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--panel-edge);
+    }
+
+    .queued h3 {
+        font-family: var(--font-display);
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--signal);
+        margin: 0 0 6px;
     }
 
     /* the list of what has been added takes whatever the two above it leave */
