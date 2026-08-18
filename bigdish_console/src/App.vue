@@ -621,11 +621,12 @@
 
     header {
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 18px;
         padding: 0 4px;
     }
 
+    /* one line, one size, one colour: the site and what it is are the same title */
     h1 {
         font-family: var(--font-display);
         font-weight: 600;
@@ -636,21 +637,18 @@
     }
 
     .subtitle {
-        font-weight: 500;
-        color: var(--muted);
         margin-left: 12px;
-        letter-spacing: 0.22em;
-        font-size: 16px;
     }
 
+    /* the state reads as part of that line: same size, sitting on the same baseline */
     .header-state {
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 7px;
         font-family: var(--font-display);
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        font-size: 14px;
+        font-size: 24px;
         color: var(--muted);
     }
 
@@ -659,6 +657,9 @@
         height: 9px;
         border-radius: 50%;
         background: #555;
+        /* a block among baseline-aligned text: lifted to sit on the cap height */
+        align-self: center;
+        transform: translateY(-2px);
     }
 
     .state-authenticated .lamp { background: #c9a83c; }
@@ -669,6 +670,8 @@
         margin-left: auto;
         display: flex;
         gap: 8px;
+        /* buttons are boxes, not text: centred on the header rather than on its baseline */
+        align-self: center;
     }
 
     .theme-toggle {

@@ -10,8 +10,10 @@
     // How each quantity is written. Every figure on a line is the same width whatever the
     // reading, so the only thing that moves in this panel is the digits themselves.
     const LONGITUDE = { digits: 3, decimals: 2, sign: 'none' };    // 0 to 360: az, ra, l
-    const LATITUDE = { digits: 2, decimals: 2 };                   // el, dec, b
-    const RATE = { digits: 2, decimals: 3 };                       // deg/s, up to 30
+    // signed always, not only when negative: which side of the equator, and which way the
+    // dish is moving, are the things being read here
+    const LATITUDE = { digits: 2, decimals: 2, sign: 'always' };   // el, dec, b
+    const RATE = { digits: 2, decimals: 3, sign: 'always' };       // deg/s, up to 30
     const VOLTS = { digits: 2, decimals: 1 };
     const AMPS = { digits: 2, decimals: 2, sign: 'always' };       // read for direction
 
