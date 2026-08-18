@@ -17,6 +17,10 @@ export function makeAzElFunction(spec, site) {
         return (date) => fixedFrameAzEl(spec.frame, spec.coord1, spec.coord2, site, date);
     }
 
+    if (spec.type === "ephemeris") {
+        return makeStateVectorFunction(spec, site);
+    }
+
     if (spec.type === "body") {
         const observer = new Astronomy.Observer(site.latitude, site.longitude, site.altitude_m);
         return (date) => {
@@ -27,7 +31,12 @@ export function makeAzElFunction(spec, site) {
     }
 
     if (spec.type === "satellite") {
-        const satrec = satellite.twoline2satrec(spec.tle[0], spec.tle[1]);
+        // OMM is what CelesTrak serves now and what the two-line format has been superseded
+        // by; a TLE is still accepted, since a cached one or a hand-pasted one is still a
+        // perfectly good set of elements.
+        const satrec = spec.omm
+            ? satellite.json2satrec(spec.omm)
+            : satellite.twoline2satrec(spec.tle[0], spec.tle[1]);
         const observerGd = {
             latitude: satellite.degreesToRadians(site.latitude),
             longitude: satellite.degreesToRadians(site.longitude),
@@ -53,6 +62,64 @@ export function makeAzElFunction(spec, site) {
     }
 
     throw new Error(`Unknown strobe target type "${spec.type}".`);
+}
+
+// Where to point at a table of state vectors: interpolate the orbit, subtract the observer,
+// and rotate what is left into the horizontal frame.
+//
+// Interpolation is cubic Hermite, using the velocities the file gives alongside the positions.
+// Straight lines between states would not do: at the sixty second spacing these files use, a
+// satellite in low orbit departs from the chord by about four kilometres, which at a few
+// hundred kilometres range is half a degree -- a fifth of the beamwidth, and worse than not
+// pointing at all. With the velocities in hand the cubic is nearly exact and costs nothing.
+function makeStateVectorFunction(spec, site) {
+    const observer = new Astronomy.Observer(site.latitude, site.longitude, site.altitude_m);
+    const { times, states, kmPerAu } = spec;
+
+    return (date) => {
+        const seconds = date.getTime() / 1000;
+        if (seconds < times[0] || seconds > times[times.length - 1]) {
+            return null;   // outside what the file covers; the caller reports it
+        }
+
+        // the interval containing this moment
+        let low = 0;
+        let high = times.length - 1;
+        while (high - low > 1) {
+            const middle = (low + high) >> 1;
+            if (times[middle] <= seconds) low = middle;
+            else high = middle;
+        }
+
+        const span = times[high] - times[low];
+        const t = span > 0 ? (seconds - times[low]) / span : 0;
+        const before = states[low];
+        const after = states[high];
+
+        // Hermite basis on the unit interval, with the velocities scaled by the span
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1;
+        const h10 = t3 - 2 * t2 + t;
+        const h01 = -2 * t3 + 3 * t2;
+        const h11 = t3 - t2;
+
+        const position = [0, 1, 2].map((axis) =>
+            h00 * before[axis] + h10 * span * before[axis + 3]
+            + h01 * after[axis] + h11 * span * after[axis + 3]);
+
+        const time = Astronomy.MakeTime(date);
+        const observerVector = Astronomy.ObserverVector(time, observer, false);
+        const toSatellite = new Astronomy.Vector(
+            position[0] / kmPerAu - observerVector.x,
+            position[1] / kmPerAu - observerVector.y,
+            position[2] / kmPerAu - observerVector.z,
+            time);
+        const horizontal = Astronomy.RotateVector(
+            Astronomy.Rotation_EQJ_HOR(time, observer), toSatellite);
+        const sphere = Astronomy.HorizonFromVector(horizontal, null);
+        return { az: sphere.lon, el: sphere.lat };
+    };
 }
 
 // Current az/el of a fixed celestial coordinate (J2000 ra/dec or galactic l/b, degrees).

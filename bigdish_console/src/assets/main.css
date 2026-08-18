@@ -34,9 +34,12 @@
     --panel: #1b2027;
     --panel-edge: #2c333d;
     --panel-inset: #10131a;
-    --text: #cfd3d9;
-    --text-strong: #fff;
-    --muted: #838b96;
+    /* Amber, after the phosphor the old consoles used: easier on the eyes over a long
+     * session in a dark room than a cold grey, and it leaves the teal and orange marks
+     * clearly distinct from ordinary text. */
+    --text: #ffb000;
+    --text-strong: #ffd694;
+    --muted: #bf8a41;
     --accent: #3fae94;      /* status, current-position marks on dark ground */
     --signal: #e0562f;      /* commanded / target marks, stop actions */
     /* The map's chart paper and the marks inked on it are the same in both themes; they
@@ -49,6 +52,10 @@
     --sky-bg: #060a12;      /* the star chart's night sky */
     --chart-ring-tick: rgba(131, 139, 150, 0.45);
     --chart-scale: rgba(131, 139, 150, 0.6);   /* the map's elevation quadrant */
+    --plot-grid: rgba(131, 139, 150, 0.16);    /* diagnostics gridlines, kept well back */
+    --plot-zero: rgba(131, 139, 150, 0.35);    /* and the zero line, only just ahead of them */
+    --trace-az: #1f77b4;                       /* matplotlib's blue and red, which read as */
+    --trace-el: #d62728;                       /* azimuth and elevation on either theme */
     --track-live: #8cc4ef;                     /* the focused target, off the chart paper */
     --track-live-dim: rgba(140, 196, 239, 0.55);
 
@@ -78,6 +85,8 @@
     --sky-bg: #f7f6f2;
     --chart-ring-tick: rgba(97, 104, 111, 0.5);
     --chart-scale: rgba(97, 104, 111, 0.7);
+    --plot-grid: rgba(97, 104, 111, 0.20);
+    --plot-zero: rgba(97, 104, 111, 0.40);
     --track-live: #1f4f7d;
     --track-live-dim: rgba(31, 79, 125, 0.6);
 }
@@ -107,13 +116,16 @@ body {
     padding: 10px 12px 12px;
 }
 
+/* Every control group's name, and the chart tabs beside it (.chart-tabs in App.vue), read
+ * as one family with the site title: same colour, same size, so the panel a control lives
+ * in is never a step down in prominence from the row of tabs above it. */
 .panel-title {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 15px;
+    font-size: 17px;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--muted);
+    color: var(--text);
     margin: 0 0 8px;
     display: flex;
     align-items: baseline;
@@ -188,6 +200,34 @@ button.signal:hover:not(:disabled) {
 .error-text {
     color: var(--danger);
     font-size: 13px;
+}
+
+/* Reserved space.
+ *
+ * The sidebar is read while the dish is moving, and anything in it that comes and goes --
+ * a queued file, an offset, a warning -- shifts everything below it when it does, and back
+ * again when it stops. So the blocks that vary keep the height of the most they will ever
+ * hold, whether or not they are holding it at the moment, and the layout stays put.
+ *
+ * Sized in lines of their own text, which needs the line height pinned: without it the
+ * browser's "normal" varies with the font and the reserve is off by a few pixels a line.
+ * .hidden keeps a block's space while taking it out of sight, for the ones that would
+ * otherwise be shown empty. */
+.reserve-1, .reserve-2 { line-height: 1.4; }
+.reserve-1 { min-height: 1.4em; }
+.reserve-2 { min-height: 2.8em; }
+
+.hidden {
+    visibility: hidden;
+}
+
+/* For text in a one-line slot: rather than wrap and push everything below it down, a long
+ * one is cut off with an ellipsis. Anything that can be cut carries the whole of itself in
+ * a title attribute, so it is a hover away. */
+.one-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 @media (prefers-reduced-motion: reduce) {

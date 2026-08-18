@@ -5,7 +5,7 @@
     import { ref, computed, watch } from 'vue';
     import { parseAngle, formatDeg } from '../lib/format.js';
     import {
-        OFFSET_FRAMES, isZeroOffset, skySeparation, currentLatitudeIn, describeOffset,
+        OFFSET_FRAMES, isZeroOffset, skySeparation, describeOffset,
     } from '../lib/offset.js';
 
     const props = defineProps(['store']);
@@ -18,23 +18,6 @@
 
     const labels = computed(() => OFFSET_FRAMES[frame.value]);
     const active = computed(() => !isZeroOffset(props.store.offset));
-    const tracking = computed(() =>
-        props.store.strobe?.active || props.store.activeCommand?.type === 'track');
-
-    // What the beam actually moves, which for the longitude-like axis depends on where the
-    // dish is pointing now.
-    const separation = computed(() => {
-        const offset = props.store.offset;
-        const latitude = currentLatitudeIn(offset.frame, props.store);
-        if (isZeroOffset(offset) || latitude === undefined || latitude === null) return null;
-        return skySeparation(offset, latitude);
-    });
-
-    // An az/el or track offset on a sky target has to be strobed: say so up front.
-    const strobeWarning = computed(() =>
-        (frame.value === 'azel' || frame.value === 'track')
-        && props.store.activeCommand?.type === 'track');
-
     // While the console is driving the track it knows where the source itself is, so it can
     // report exactly where the beam was put rather than a first-order estimate.
     const beamPlacement = computed(() => {
@@ -92,39 +75,26 @@
                 <option v-for="(f, key) in OFFSET_FRAMES" :key="key" :value="key">{{ f.label }}</option>
             </select>
         </div>
-        <div class="row">
+        <div class="row coords">
             <label for="offset-c1">{{ labels.c1 }}</label>
             <input id="offset-c1" type="text" v-model="first" placeholder="degrees" @keyup.enter="apply" />
-        </div>
-        <div class="row">
-            <label for="offset-c2">{{ labels.c2 }}</label>
+            <label for="offset-c2" class="second">{{ labels.c2 }}</label>
             <input id="offset-c2" type="text" v-model="second" placeholder="degrees" @keyup.enter="apply" />
         </div>
         <div class="buttons">
             <button @click="apply">Apply</button>
-            <button v-if="active" class="signal" @click="clear">Clear</button>
+            <button class="signal" :disabled="!active" @click="clear">Clear</button>
         </div>
-        <p v-if="parseError" class="error-text">{{ parseError }}</p>
-        <p v-if="beamPlacement" class="hint data">
-            Beam is {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
-            az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
-        </p>
-        <p class="hint">
-            <template v-if="active && store.offset.frame === 'track'">
-                Δ∥ leads the target along its path, Δ⊥ steps across it, both in true on-sky
-                degrees ({{ formatDeg(separation, 2) }}° total).
-            </template>
-            <template v-else-if="active && separation !== null">
-                Beam moves {{ formatDeg(separation, 2) }}° on sky from the current pointing.
-            </template>
-            <template v-else-if="active">Applied to commanded coordinates.</template>
-            <template v-else-if="tracking">Applying re-points what is tracking now.</template>
-            <template v-else>Added to every pointing command until cleared.</template>
-            <template v-if="strobeWarning">
-                This offset does not stay put on the sky, so the console will take over
-                tracking from the server.
-            </template>
-        </p>
+        <!-- One line, and only when there is something in it: an entry that did not parse,
+             or where the beam actually ended up once an offset is applied. Nothing is held
+             open under the buttons for a message that is usually not there. -->
+        <div v-if="parseError || beamPlacement" class="message">
+            <p v-if="parseError" class="error-text one-line" :title="parseError">{{ parseError }}</p>
+            <p v-else class="hint data one-line">
+                {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
+                az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
+            </p>
+        </div>
     </div>
 </template>
 
@@ -135,6 +105,15 @@
         gap: 8px;
         align-items: center;
         margin-bottom: 7px;
+    }
+
+    /* both offsets on one line, in the order the frame names them */
+    .coords {
+        grid-template-columns: 80px 1fr auto 1fr;
+    }
+
+    .coords .second {
+        padding-left: 8px;
     }
 
     .badge {
@@ -155,5 +134,15 @@
         font-size: 12px;
         color: var(--muted);
         margin: 8px 0 0;
+    }
+
+    .message {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    .message p {
+        margin: 0;
     }
 </style>

@@ -50,25 +50,56 @@ export function formatDeg(value, digits = 2) {
     return value.toFixed(digits);
 }
 
+// Readout numbers of a fixed length: the same count of characters whatever the value, so a
+// figure that runs 9.99 -> 10.00 -> 100.00 never changes width and nothing beside it moves.
+// The digits before the point are zero filled to `digits`, which is chosen per quantity --
+// three for the ones that run to 360, two for the rest.
+//
+// The sign is a column of its own rather than something that appears and disappears:
+//   "none"     the quantity cannot be negative (azimuth, right ascension, galactic l)
+//   "space"    a minus when negative, a space where the plus would be
+//   "always"   an explicit + or -, for quantities read for their direction (motor current)
+//
+// A missing reading fills the same width with dashes, so a dropout does not shift the layout
+// either. Values above the digit count are not truncated: better a readout that grows by a
+// character than one that lies about where the dish is pointing.
+export function fixedNumber(value, { digits = 3, decimals = 2, sign = "space" } = {}) {
+    const width = digits + (decimals > 0 ? decimals + 1 : 0);
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+        return (sign === "none" ? "" : " ") + "-".repeat(width);
+    }
+    // rounded first, so a value a hair below zero does not come out as "-00.00"
+    const rounded = Number(value.toFixed(decimals));
+    const body = Math.abs(rounded).toFixed(decimals).padStart(width, "0");
+    if (sign === "none") {
+        return body;
+    }
+    return (rounded < 0 ? "-" : sign === "always" ? "+" : " ") + body;
+}
+
 export function degToHMS(degrees) {
     if (!Number.isFinite(degrees)) {
-        return "---";
+        return "--h--m--.-s";   // the width of a real one, so a dropout moves nothing
     }
+    // Rounded to the printed precision first, then carried, or a value a whisker short of
+    // the wrap prints as 23h59m60.0s -- a time that does not exist.
+    const TENTHS = 24 * 3600 * 10;
     const hoursTotal = (((degrees % 360) + 360) % 360) / 15;
-    const h = Math.floor(hoursTotal);
-    const m = Math.floor((hoursTotal - h) * 60);
-    const s = ((hoursTotal - h) * 60 - m) * 60;
+    const tenths = Math.round(hoursTotal * 36000) % TENTHS;
+    const h = Math.floor(tenths / 36000);
+    const m = Math.floor((tenths % 36000) / 600);
+    const s = (tenths % 600) / 10;
     return `${String(h).padStart(2, "0")}h${String(m).padStart(2, "0")}m${s.toFixed(1).padStart(4, "0")}s`;
 }
 
 export function degToDMS(degrees) {
     if (!Number.isFinite(degrees)) {
-        return "---";
+        return " --\u00b0--\u2032--\u2033";   // a space where the sign goes, as elsewhere
     }
     const sign = degrees < 0 ? "-" : "+";
-    const abs = Math.abs(degrees);
-    const d = Math.floor(abs);
-    const m = Math.floor((abs - d) * 60);
-    const s = ((abs - d) * 60 - m) * 60;
-    return `${sign}${String(d).padStart(2, "0")}°${String(m).padStart(2, "0")}′${s.toFixed(0).padStart(2, "0")}″`;
+    const seconds = Math.round(Math.abs(degrees) * 3600);
+    const d = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${sign}${String(d).padStart(2, "0")}\u00b0${String(m).padStart(2, "0")}\u2032${String(s).padStart(2, "0")}\u2033`;
 }

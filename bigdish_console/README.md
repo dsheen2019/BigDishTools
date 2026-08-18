@@ -52,6 +52,12 @@ Development (auto-reload):
 npm run dev
 ```
 
+`serve.py` marks `index.html` as never cacheable and the hashed bundles beside it as cacheable
+forever, which is the arrangement the build's content-hashed filenames exist for. Without it a
+browser can hold an old `index.html` across a `git pull` and then ask for bundles that the
+pull deleted, which looks like a broken install: a page of 404s, a flood of broken pipes in
+the log, and the app quietly running whatever it had before.
+
 Production-style (no Node needed at runtime):
 
 ```sh
@@ -68,9 +74,23 @@ you change anything under `src/`**, or the machine serving it will quietly run t
 
 ## Configuration
 
-`public/config.json` holds the dish site location, default server host/port, map radius,
-projection and tile style, dish beamwidth (for the beam wedge on the map), strobe cadences,
-and the target list. Target types:
+`config.toml` holds the dish site location, default server host/port, map radius, projection
+and tile style, dish beamwidth (for the beam wedge on the map), strobe cadences, and the
+target list. It is TOML so that it can carry comments explaining each of those, and it is
+commented; the browser is handed JSON, converted by whichever server is running.
+
+It sits beside `serve.py` rather than in `public/`, so the build does not copy it and there is
+only ever one of it: editing it takes effect on a browser reload, with nothing rebuilt and
+nothing restarted. `python3 serve.py --config other.toml` serves a different one — useful for
+a second site or a cut-down target list — and `BIGDISH_CONSOLE_CONFIG=other.toml npm run dev`
+does the same in development. A `.json` file is still read as JSON, if you would rather keep
+one.
+
+Reading TOML needs Python 3.11 or newer for `tomllib` — Debian 12 and Raspberry Pi OS
+bookworm both ship it. On an older Python, `pip install tomli` is enough, and `serve.py` says
+so if it comes to it.
+
+Target types:
 
 - `fixed` — ra/dec or galactic coordinates; tracked by the server itself.
 - `station` — a ground station by lat/lon; becomes a map marker and an az/el goto at its
@@ -78,8 +98,10 @@ and the target list. Target types:
 - `body` — a solar-system body by name (astronomy-engine); tracked by strobing
   `goto_posvel` az/el commands from a Web Worker, like
   `example_pointing_scripts/moon_tracker.py`.
-- `satellite` — a NORAD catalog number; TLE from CelesTrak, propagated with satellite.js
-  (SGP4), strobed the same way.
+- `satellite` — a NORAD catalog number; orbital elements from CelesTrak as OMM, propagated
+  with satellite.js (SGP4), strobed the same way. OMM supersedes the two-line format, which
+  cannot carry catalog numbers past five digits; a TLE is still accepted if that is what you
+  have.
 
 ## Themes
 
@@ -91,6 +113,53 @@ beam wedge, range rings, station marks, the sky track — read the same by day o
 chart itself is one drawing in two consoles. Everything around it follows the theme, including
 the degree ring, whose background is simply left unpainted so the panel shows through. The
 star chart flips too, using VirtualSky's `negative` palette for black-on-white.
+
+## Finding targets
+
+The Utilities tab looks up things the config does not list. A satellite by name, catalog
+number or international designator from CelesTrak, or an astronomical source by name or
+designation from SIMBAD; either can be added to the Targets dropdown, where it behaves like
+anything else — sky path, offsets, tracking. Added targets belong to the session and are gone
+on reload; to keep one, put it in `config.toml`.
+
+An ephemeris can also be loaded from a file: OMM (json), a TLE, or a CCSDS OEM. The first two
+are elements and get propagated like any satellite. An OEM is a table of state vectors somebody
+else has already computed — often a better prediction than SGP4 can give, since the operator
+knows their own manoeuvres — so it becomes a target of its own kind, interpolated between the
+states with a cubic that uses the velocities the file carries. A straight line between them
+would not do: at the sixty second spacing these files use, a satellite in low orbit departs
+from the chord by about four kilometres, which at a few hundred kilometres range is nearly half
+a degree. Files are read in the browser; nothing is uploaded.
+
+Sources are resolved by the same CDS name resolver `astropy`'s `SkyCoord.from_name` uses,
+which is what makes "crab", "m87" and "sgr a*" work; the results below the first are other
+objects whose identifiers also match. Searching happens when asked rather than as you type,
+`serve.py` sends at most two requests per search, and it caches them for two minutes and never
+sends two closer together than a second — CelesTrak and CDS answer out of goodwill.
+
+It also runs a prepared pointing file — the csv `WR66_run_pointing_file.py` takes, and
+`oem_to_bigdish_commands.py` writes. The whole file is checked when loaded, by the same rules
+as the Python and reporting the offending line, because a row that is wrong in a way nobody
+notices until the dish drives into a limit is the thing to avoid. What it found is shown before
+anything is committed: rows, frames, when it starts and for how long, the step between rows,
+and the lowest elevation it commands.
+
+Rows are handed to the server as `track` commands carrying `executeat` rather than by waiting
+for each moment and firing. The server holds each until its time and applies it to the second,
+and since only the next few seconds are ever committed, cancelling means simply not sending
+the rest. A queued file leaves the dish alone until it starts, so ordinary commands still work;
+at its start time it stands down anything else running and **sets the pointing offset to zero**,
+so the file runs from a known state, and can be nudged by hand afterwards. Losing the
+connection while queued costs nothing unless it is still down when the file is due; losing it
+mid-run stops the file. The state and a cancel button sit in the sidebar, visible from any tab.
+
+The tab also logs the dish's position to a csv in the format `WR66_log_position.py` writes —
+same columns, same precision, same line endings — so anything that reads one of those reads
+this. It records the readings the status poll already collects rather than opening a second
+stream of requests, which has one consequence worth knowing: an interval finer than the poll
+period cannot be honoured, and one that is not a multiple of it is rounded to the nearest that
+is. The panel says what it settled on. Stretches where readings stopped arriving are counted
+and reported, since a gap in a log that looks continuous is worse than a short log.
 
 ## Sky tracks
 
@@ -122,6 +191,37 @@ never come within 1300 and 998 miles of the dish. The angular plot is the useful
 far ahead to look for the next pass) and `max_points` (the sampling ceiling; the path is
 otherwise sampled every half degree of travel, so a satellite pass gets seconds-apart samples
 and the moon gets minutes-apart ones).
+
+## Diagnostics
+
+The Diagnostics tab plots the last hour of telemetry: position and pointing error on the
+left, motor voltage and current on the right. It is fed from the status poll that already
+runs, so it costs nothing extra to collect, and it starts when the console connects — there
+is no server-side log to backfill from, and this is not the program to build one in.
+
+The error is the difference between the position the server reports and where the dish should
+have been *at the timestamp of that reading*, which the server provides. For a track that
+means recomputing the target's az/el for each sample, since it moves; for a goto it is the
+commanded position; and before anything has been commanded there is no error, so the plot is
+empty rather than showing zero.
+
+`diagnostics.error_limit_deg` in `config.toml` fixes the error axis, deliberately tight —
+a converged track sits a few hundredths of a degree off, which an axis wide enough to hold a
+slew would flatten to nothing. Samples beyond the bound are marked at the edge of the plot
+rather than drawn as though they sat on it, so a slew reads as off-scale. `dish.az_range` and
+`dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
+themselves.
+
+The plots also carry the commanded position, dotted, behind the measured one; on a healthy
+track the two lie on top of each other, which is why they are told apart by line style rather
+than by shade.
+
+A reading is kept once a second (`diagnostics.sample_seconds`) and the plots redraw every five
+(`redraw_seconds`). An hour across six hundred pixels is six seconds to the pixel, so storing
+or drawing faster shows nothing more. Within that, each pixel column shows the range of the
+samples falling in it rather than their average, so a brief excursion still appears as a
+spike. The chart tabs also stop drawing entirely while hidden, the star chart's live clock
+included.
 
 ## Pointing offsets
 

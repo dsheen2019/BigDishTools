@@ -1,11 +1,11 @@
 <script setup>
     import { ref, computed, watch, onUnmounted } from 'vue';
     import { makeAzElFunction, fixedFrameAzEl } from '../lib/ephemeris.js';
-    import { fetchTLE } from '../lib/targets.js';
+    import { fetchElements } from '../lib/targets.js';
     import { formatDeg } from '../lib/format.js';
 
     const props = defineProps(['store', 'targets', 'config']);
-    const emit = defineEmits(['command', 'start-strobe', 'stop-strobe']);
+    const emit = defineEmits(['command', 'goto-target', 'track-target']);
 
     const categories = computed(() => {
         const groups = new Map();
@@ -22,8 +22,10 @@
     const duration = ref(300);
     const preview = ref('');
     const canMove = computed(() => props.store.state === 'INITIALIZED');
-    const strobeActiveHere = computed(() =>
-        props.store.strobe?.active && props.store.strobe.name === selectedName.value);
+
+    // Anything in the list can be gone to. Tracking is for the things that move against the
+    // ground: a station on the horizon stays where it is put, so its Track is greyed out.
+    const canTrack = computed(() => ['track', 'strobe'].includes(selected.value?.kind));
 
     // Live az/el preview for targets the console computes itself. Satellites need their
     // TLE first; it is fetched (and cached) as soon as one is selected.
@@ -73,9 +75,9 @@
 
         const spec = { ...target.spec };
         if (spec.type === 'satellite') {
-            preview.value = 'fetching TLE…';
+            preview.value = 'fetching elements…';
             try {
-                spec.tle = await fetchTLE(target.catnr, props.config.tle_max_age_hours);
+                spec.omm = await fetchElements(target.catnr, props.config.tle_max_age_hours);
             } catch (error) {
                 if (generation === previewGeneration) preview.value = error.message;
                 return;
@@ -103,17 +105,17 @@
     watch(selected, setupPreview, { immediate: true });
     onUnmounted(() => clearInterval(previewTimer));
 
+    // Both go to App.vue, which knows whether a target is one the server can follow or one
+    // this console has to compute; the panel only says which target and for how long.
     function goto_() {
-        const t = selected.value;
-        emit('command', { action: 'goto', frame: t.frame, coord1: t.coord1, coord2: t.coord2 });
+        if (selected.value) emit('goto-target', selected.value);
     }
 
     function track() {
-        const t = selected.value;
-        emit('command', {
-            action: 'track', frame: t.frame, coord1: t.coord1, coord2: t.coord2,
-            duration: Number(duration.value),
-        });
+        if (selected.value) {
+            emit('track-target',
+                { target: selected.value, duration: Number(duration.value) });
+        }
     }
 </script>
 
@@ -126,25 +128,22 @@
                 <option v-for="target in list" :key="target.name" :value="target.name">{{ target.name }}</option>
             </optgroup>
         </select>
-        <p class="preview data">{{ preview }}</p>
+        <p class="preview data reserve-1 one-line" :title="preview">{{ preview }}</p>
 
-        <template v-if="selected">
-            <div class="row" v-if="selected.kind === 'track'">
-                <label for="target-duration">Track for</label>
-                <input id="target-duration" type="number" min="1" v-model="duration" />
-                <span class="data seconds">s</span>
-            </div>
+        <!-- Every control the panel has, always in the same place: what a given target does
+             not support is greyed out rather than taken away. A control that vanishes moves
+             everything under it and leaves you wondering whether you imagined it. -->
+        <div class="row">
+            <label for="target-duration">Track for</label>
+            <input id="target-duration" type="number" min="1" v-model="duration"
+                   :disabled="!canTrack" />
+            <span class="data seconds">s</span>
+            <!-- on the same row as the duration they apply to, as in the point panel -->
             <div class="buttons">
-                <template v-if="selected.kind === 'strobe'">
-                    <button v-if="!strobeActiveHere" :disabled="!canMove" @click="emit('start-strobe', selected)">Track continuously</button>
-                    <button v-else class="signal" @click="emit('stop-strobe')">Stop tracking</button>
-                </template>
-                <template v-else>
-                    <button :disabled="!canMove" @click="goto_">Go to</button>
-                    <button v-if="selected.kind === 'track'" :disabled="!canMove" @click="track">Track</button>
-                </template>
+                <button :disabled="!canMove || !selected" @click="goto_">Go to</button>
+                <button :disabled="!canMove || !canTrack" @click="track">Track</button>
             </div>
-        </template>
+        </div>
     </div>
 </template>
 
@@ -153,7 +152,6 @@
         font-size: 12px;
         color: var(--muted);
         margin: 8px 0;
-        min-height: 15px;
     }
 
     .row {
@@ -175,5 +173,11 @@
     .buttons {
         display: flex;
         gap: 8px;
+        margin-left: auto;
+    }
+
+    /* the buttons ride on it, and nothing follows */
+    .row:last-child {
+        margin-bottom: 0;
     }
 </style>

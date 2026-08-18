@@ -1,21 +1,34 @@
 <script setup>
     import { reactive, ref, computed, watchEffect, onUnmounted } from 'vue';
     import { DishClient } from '@client/bigdish_client.js';
-    import { buildTargets, fetchTLE } from './lib/targets.js';
+    import { buildTargets, fetchElements } from './lib/targets.js';
     import { isZeroOffset, offsetAzEl, offsetFixedPosition } from './lib/offset.js';
     import { fixedFrameAzEl, makeAzElFunction } from './lib/ephemeris.js';
+    import { TelemetryHistory } from './lib/history.js';
+    import { PositionLog } from './lib/position_log.js';
+    import { Schedule } from './lib/schedule.js';
+    import { angleDiff } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
     import StatusPanel from './components/StatusPanel.vue';
     import CommandPanel from './components/CommandPanel.vue';
     import TargetPanel from './components/TargetPanel.vue';
     import OffsetPanel from './components/OffsetPanel.vue';
     import UsersPanel from './components/UsersPanel.vue';
+    import UtilitiesTab from './components/UtilitiesTab.vue';
+    import DiagnosticsTab from './components/DiagnosticsTab.vue';
     import MapView from './components/MapView.vue';
     import StarChart from './components/StarChart.vue';
 
     const props = defineProps(['config']);
     const config = props.config;
-    const targets = buildTargets(config);
+    // The configured targets, plus anything found by search this session. Deliberately not
+    // written back to config.toml: a search result is a thing you are trying, and the file is
+    // the list somebody curated.
+    const configuredTargets = buildTargets(config);
+    const targets = computed(() => [...configuredTargets, ...store.extraTargets]);
+    const history = new TelemetryHistory((config.diagnostics?.window_minutes ?? 60) * 60);
+    // Reactive so the panel's counters move; the rows themselves are plain objects inside it.
+    const positionLog = reactive(new PositionLog(1 / config.status_poll_hz));
 
     const client = ref(null);
     const showLogin = ref(true);
@@ -38,7 +51,13 @@
         // {name, spec} of the target whose sky path the map and star chart draw: whichever
         // one the target dropdown has selected, or is being tracked.
         focus: null,
+        // targets added by search, for this session only
+        extraTargets: [],
+        // what a queued or running pointing file is doing, for the panels to show
+        schedule: { state: 'idle', text: '' },
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
+        // the status poll rate, so panels can say what interval they can actually manage
+        pollHz: config.status_poll_hz,
         lastError: '',
     });
 
@@ -63,6 +82,31 @@
     // Something is following a moving target: either the server's own track or our strobe.
     const tracking = computed(() =>
         Boolean(store.strobe?.active || store.activeCommand?.type === 'track'));
+
+    // Where the dish should be pointing at a given moment, or null when nothing has been
+    // commanded and there is therefore no error to speak of. Set whenever the commanded thing
+    // changes, and evaluated per sample rather than per command, because for a track the
+    // answer moves: the error we want is against where the target was at the instant the
+    // server took the reading, not against where it was when the command was sent.
+    let expectedAzElAt = null;
+
+    function expectFixed(az, el) {
+        expectedAzElAt = () => ({ az, el });
+    }
+
+    function expectSkyFrame(frame, coord1, coord2) {
+        expectedAzElAt = (seconds) =>
+            fixedFrameAzEl(frame, coord1, coord2, config.site, new Date(seconds * 1000));
+    }
+
+    function expectSpec(spec) {
+        try {
+            const azElAt = makeAzElFunction(spec, config.site);
+            expectedAzElAt = (seconds) => azElAt(new Date(seconds * 1000));
+        } catch {
+            expectedAzElAt = null;
+        }
+    }
 
     let posTimer = null;
     let commandTimer = null;
@@ -90,6 +134,8 @@
                         az_voltage: d.az_voltage, az_current: d.az_current,
                         el_voltage: d.el_voltage, el_current: d.el_current,
                     };
+                    recordSample(d);
+                    positionLog.record(d);
                 }
             } catch { /* transient; connection loss is handled by onstatechange */ }
             finally { pollInFlight = false; }
@@ -124,7 +170,57 @@
             : [command.ra_pos, command.dec_pos];
         if (Number.isFinite(coord1) && Number.isFinite(coord2)) {
             store.commandedAzEl = fixedFrameAzEl(frame, coord1, coord2, config.site, new Date());
+            expectSkyFrame(frame, coord1, coord2);
         }
+    }
+
+    // Keep the reading for the diagnostics plots. The server timestamps each one, so the
+    // error is computed against that instant rather than against whenever the reply reached
+    // us, which keeps poll and network jitter out of it. Positions come back with the
+    // calibration offsets already removed (client_manager.py), so measured and expected are
+    // in the same frame and the error carries no constant bias.
+    let lastRecorded = 0;
+
+    function recordSample(d) {
+        const time = Number.isFinite(d.time) ? d.time : Date.now() / 1000;
+
+        // The status poll runs several times a second because the readouts and the map want
+        // it; the plots do not. An hour of plot is six seconds to the pixel, so storing every
+        // reading meant five times the samples, five times the ephemeris to work out where
+        // the dish should have been, and five times the scan on every redraw, for a trace
+        // that cannot show any of it.
+        if (time - lastRecorded < (config.diagnostics?.sample_seconds ?? 1)) {
+            return;
+        }
+        lastRecorded = time;
+        let azError = null;
+        let elError = null;
+        let azVelError = null;
+        let elVelError = null;
+        const expected = expectedAzElAt?.(time);
+        if (expected && Number.isFinite(d.az_pos)) {
+            azError = angleDiff(d.az_pos, expected.az);
+            elError = d.el_pos - expected.el;
+
+            // The rate the target is moving at, from a one second difference of the same
+            // function: zero for anything fixed, sidereal for a track, whatever a satellite
+            // is doing for a satellite. One implementation covers all of them.
+            const ahead = expectedAzElAt(time + 1);
+            if (ahead && Number.isFinite(d.az_vel)) {
+                azVelError = d.az_vel - angleDiff(ahead.az, expected.az);
+                elVelError = d.el_vel - (ahead.el - expected.el);
+            }
+        }
+        history.push({
+            time,
+            az: d.az_pos, el: d.el_pos,
+            azCommanded: expected ? expected.az : null,
+            elCommanded: expected ? expected.el : null,
+            azError, elError,
+            azVelError, elVelError,
+            azVoltage: d.az_voltage, azCurrent: d.az_current,
+            elVoltage: d.el_voltage, elCurrent: d.el_current,
+        });
     }
 
     function readable() {
@@ -141,6 +237,8 @@
         const c = new DishClient(host, port);
         c.onstatechange = (state) => {
             store.state = state;
+            // a queued file rides out a brief outage; a running one cannot
+            schedule.setConnected(state === 'AUTHENTICATED' || state === 'INITIALIZED');
             if (state === 'DISCONNECTED' && client.value === c) {
                 stopStrobe('Connection to the dish server was lost.');
                 stopPolling();
@@ -175,16 +273,67 @@
         }
     }
 
+    // --- pointing at a target from the target list ---
+    //
+    // Two things can be asked of any target: go to where it is now, or follow it for a while.
+    // Which machinery does the following depends on the target, not on the operator: a fixed
+    // point on the sky is handed to the server, which knows how to follow one, and anything
+    // that moves against the sky -- a planet, a satellite, a table of state vectors -- is
+    // computed here and fed to the dish as a stream of positions. Both stop after the time in
+    // the Track for field.
+
+    // Where a target is at this moment, as a single command. For the ones that move, that
+    // means working out where they are first: by the time the dish arrives they will have
+    // moved on, which is what Track is for.
+    async function gotoTarget(target) {
+        if (target.kind !== 'strobe') {
+            return sendCommand({
+                action: 'goto', frame: target.frame,
+                coord1: target.coord1, coord2: target.coord2,
+            });
+        }
+        stopStrobe();
+        let azEl;
+        try {
+            const spec = { ...target.spec };
+            if (spec.type === 'satellite') {
+                spec.omm = await fetchElements(target.catnr, config.tle_max_age_hours);
+            }
+            azEl = makeAzElFunction(spec, config.site)(new Date());
+        } catch (error) {
+            store.lastError = error.message;
+            return;
+        }
+        if (!azEl) {
+            store.lastError = `${target.name} has no position solution for right now.`;
+            return;
+        }
+        return sendCommand({ action: 'goto', frame: 'azel', coord1: azEl.az, coord2: azEl.el });
+    }
+
+    // Follow a target for the given number of seconds.
+    async function trackTarget({ target, duration }) {
+        if (target.kind !== 'strobe') {
+            return sendCommand({
+                action: 'track', frame: target.frame,
+                coord1: target.coord1, coord2: target.coord2, duration,
+            });
+        }
+        lastRequest = { kind: 'strobe', target, until: Date.now() / 1000 + duration };
+        return startStrobe(target, duration);
+    }
+
     // --- strobe tracking (client-computed az/el targets: bodies, satellites) ---
 
     let worker = null;
+    let strobeTimer = null;
 
-    async function trackTarget(target) {
-        lastRequest = { kind: 'strobe', target };
-        return startStrobe(target);
-    }
+    // Every caller has a Track for value to pass; this is what a strobe runs for if one ever
+    // does not, rather than a missing number quietly becoming no time at all.
+    const DEFAULT_TRACK_S = 300;
 
-    async function startStrobe(target) {
+    async function startStrobe(target, seconds) {
+        const limit = Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_TRACK_S;
         if (store.state !== 'INITIALIZED') {
             store.lastError = 'Dish control is required to track. Reconnect with control.';
             return;
@@ -193,14 +342,23 @@
         const spec = { ...target.spec };
         try {
             if (spec.type === 'satellite') {
-                spec.tle = await fetchTLE(target.catnr, config.tle_max_age_hours);
+                spec.omm = await fetchElements(target.catnr, config.tle_max_age_hours);
             }
         } catch (error) {
             store.strobe = { name: target.name, active: false, error: error.message };
             return;
         }
-        store.strobe = { name: target.name, active: true, az: null, el: null, up: null, error: '' };
+        // A strobe used to run until something stopped it. It now has an end, like the
+        // server's own track does, so a target followed by this console and one followed by
+        // the dish controller behave the same way from the panel.
+        const until = Date.now() / 1000 + limit;
+        store.strobe = {
+            name: target.name, active: true, until, az: null, el: null, up: null, error: '',
+        };
+        clearTimeout(strobeTimer);
+        strobeTimer = setTimeout(() => stopStrobe(), limit * 1000);
         store.focus = { name: target.name, spec };
+        expectSpec(spec);
         worker = new Worker(new URL('./workers/strobe_worker.js', import.meta.url), { type: 'module' });
         worker.onmessage = async (event) => {
             const message = event.data;
@@ -212,6 +370,12 @@
                     });
                 }
             } else if (message.type === 'command') {
+                // the timer above is the usual way this ends; this catches the case where a
+                // background tab has had its timers held back and one last position is due
+                if (Date.now() / 1000 >= until) {
+                    stopStrobe();
+                    return;
+                }
                 store.commandedAzEl = { az: message.az, el: message.el };
                 try {
                     const response = await client.value.goto_posvel(
@@ -238,6 +402,8 @@
     }
 
     function stopStrobe(error = '') {
+        clearTimeout(strobeTimer);
+        strobeTimer = null;
         if (worker) {
             worker.terminate();
             worker = null;
@@ -247,6 +413,54 @@
         } else if (!error) {
             store.strobe = null;
         }
+    }
+
+    // --- a prepared pointing file ---
+    //
+    // Rows go to the server with executeat, so only the next few seconds are ever committed
+    // and cancelling means simply not sending the rest.
+
+    const schedule = new Schedule({
+        send: (row, duration) => client.value.track(
+            row.frame, row.coord1, row.coord2, duration, row.vel1, row.vel2, row.time),
+        hold: () => stopTracking(),
+        onStart: () => {
+            // a prepared file starts from a known state: whatever offset was left applied is
+            // not part of it, and anything else commanding the dish stands down
+            stopStrobe();
+            Object.assign(store.offset, { coord1: 0, coord2: 0 });
+            lastRequest = null;
+        },
+        onState: () => {
+            // summary for the sidebar's one line; the rest for the utilities panel, which
+            // shows the queue in full and is where it can be cancelled
+            store.schedule = {
+                state: schedule.state,
+                summary: schedule.summarise(),
+                text: schedule.describe(),
+                name: schedule.file?.name ?? '',
+                startsAt: schedule.startsAt,
+                endsAt: schedule.endsAt,
+                sent: schedule.sent,
+                skipped: schedule.skipped,
+                total: schedule.file?.rows.length ?? 0,
+                message: schedule.message,
+            };
+            // the diagnostics error plot should measure against the file while it runs
+            if (schedule.state !== 'running') return;
+            const row = schedule.file?.rows[Math.max(0, schedule.sent - 1)];
+            if (!row) return;
+            if (row.frame === 'azel') expectFixed(row.coord1, row.coord2);
+            else expectSkyFrame(row.frame, row.coord1, row.coord2);
+        },
+    });
+
+    function queueFile(file) {
+        schedule.queue(file);
+    }
+
+    function cancelFile() {
+        schedule.cancel();
     }
 
     // --- commands from the panels ---
@@ -302,7 +516,7 @@
             name: `${command.frame === 'gal' ? 'l/b' : 'ra/dec'} `
                 + `${command.coord1.toFixed(3)}, ${command.coord2.toFixed(3)}`,
             spec,
-        });
+        }, command.duration);
     }
 
     // Stop whatever is tracking and hold position. There is no cancel message in the
@@ -327,7 +541,9 @@
             return;
         }
         if (lastRequest.kind === 'strobe') {
-            startStrobe(lastRequest.target);
+            // the remaining time, not a fresh helping of it
+            startStrobe(lastRequest.target,
+                Math.max(1, lastRequest.until - Date.now() / 1000));
         } else {
             issueCommand(lastRequest.command);
         }
@@ -352,21 +568,42 @@
             }
             if (!response.success) {
                 store.lastError = response.reason || `${command.action} command failed.`;
-            } else if (command.action === 'stow' || command.action === 'service') {
+                return;
+            }
+
+            if (command.action === 'stow' || command.action === 'service') {
                 // fixed positions the server knows and we do not, so they come from the config
                 const position = command.action === 'stow'
                     ? config.dish.stow_azel : config.dish.service_azel;
                 store.commandedAzEl = position ? { az: position[0], el: position[1] } : null;
+                if (position) expectFixed(position[0], position[1]);
+                else expectedAzElAt = null;
             } else if (command.frame === 'azel') {
                 store.commandedAzEl = { az: command.coord1, el: command.coord2 };
+                expectFixed(command.coord1, command.coord2);
+            } else if (command.action === 'track') {
+                // follows the sky, so the expectation has to as well
+                expectSkyFrame(command.frame, command.coord1, command.coord2);
+                store.commandedAzEl = fixedFrameAzEl(
+                    command.frame, command.coord1, command.coord2, config.site, new Date());
             } else {
                 // a sky frame: the server does the conversion, so do the same one here rather
                 // than leaving the marks pointing where the previous command went
                 store.commandedAzEl = fixedFrameAzEl(
                     command.frame, command.coord1, command.coord2, config.site, new Date());
+                expectFixed(store.commandedAzEl.az, store.commandedAzEl.el);
             }
         } catch (error) {
             store.lastError = error.message;
+        }
+    }
+
+    function addTarget(target) {
+        const existing = store.extraTargets.findIndex((t) => t.name === target.name);
+        if (existing >= 0) {
+            store.extraTargets.splice(existing, 1, target);   // refreshed elements win
+        } else {
+            store.extraTargets.push(target);
         }
     }
 
@@ -414,7 +651,8 @@
                 <StatusPanel :store="store" />
                 <CommandPanel :store="store" :entry="entry" @command="sendCommand" />
                 <TargetPanel :store="store" :targets="targets" :config="config"
-                             @command="sendCommand" @start-strobe="trackTarget" @stop-strobe="stopStrobe" />
+                             @command="sendCommand" @goto-target="gotoTarget"
+                             @track-target="trackTarget" />
                 <OffsetPanel :store="store" @apply="applyOffset" />
                 <UsersPanel :client="client" :store="store" />
             </aside>
@@ -423,11 +661,18 @@
                 <div class="chart-tabs" role="tablist">
                     <button role="tab" :aria-selected="tab === 'map'" :class="{ active: tab === 'map' }" @click="tab = 'map'">Map</button>
                     <button role="tab" :aria-selected="tab === 'sky'" :class="{ active: tab === 'sky' }" @click="tab = 'sky'">Sky</button>
+                    <button role="tab" :aria-selected="tab === 'diagnostics'" :class="{ active: tab === 'diagnostics' }" @click="tab = 'diagnostics'">Diagnostics</button>
+                    <button role="tab" :aria-selected="tab === 'utilities'" :class="{ active: tab === 'utilities' }" @click="tab = 'utilities'">Utilities</button>
                 </div>
                 <MapView v-show="tab === 'map'" :store="store" :config="config" :targets="targets"
                          @set-azimuth="(az) => setEntry('azel', az.toFixed(2), null)" />
                 <StarChart v-show="tab === 'sky'" :visible="tab === 'sky'" :store="store" :config="config"
                            @set-radec="(ra, dec) => setEntry('radec', ra.toFixed(3), dec.toFixed(3))" />
+                <DiagnosticsTab v-show="tab === 'diagnostics'" :visible="tab === 'diagnostics'"
+                                :store="store" :config="config" :history="history" />
+                <UtilitiesTab v-show="tab === 'utilities'" :store="store" :log="positionLog"
+                              @add-target="addTarget" @queue-file="queueFile"
+                              @cancel-file="cancelFile" />
             </section>
         </main>
 
@@ -446,11 +691,12 @@
 
     header {
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 18px;
         padding: 0 4px;
     }
 
+    /* one line, one size, one colour: the site and what it is are the same title */
     h1 {
         font-family: var(--font-display);
         font-weight: 600;
@@ -461,21 +707,18 @@
     }
 
     .subtitle {
-        font-weight: 500;
-        color: var(--muted);
         margin-left: 12px;
-        letter-spacing: 0.22em;
-        font-size: 16px;
     }
 
+    /* the state reads as part of that line: same size, sitting on the same baseline */
     .header-state {
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 7px;
         font-family: var(--font-display);
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        font-size: 14px;
+        font-size: 24px;
         color: var(--muted);
     }
 
@@ -484,6 +727,9 @@
         height: 9px;
         border-radius: 50%;
         background: #555;
+        /* a block among baseline-aligned text: lifted to sit on the cap height */
+        align-self: center;
+        transform: translateY(-2px);
     }
 
     .state-authenticated .lamp { background: #c9a83c; }
@@ -494,6 +740,8 @@
         margin-left: auto;
         display: flex;
         gap: 8px;
+        /* buttons are boxes, not text: centred on the header rather than on its baseline */
+        align-self: center;
     }
 
     .theme-toggle {
@@ -513,10 +761,11 @@
     }
 
     aside {
-        /* Wide enough that the az/el readout in StatusPanel never wraps, which on a moving
-         * dish would otherwise reflow line by line and read as a fault. Each axis needs
-         * label 18 + gap 8 + 7ch at 26px (109) + gap 8 + 10ch at 11px (66) = 209 px, so two
-         * of them with a 20 px gap need 438, plus the panel's 24 px padding and 2 px border.
+        /* Wide enough for StatusPanel's two columns of readouts to sit side by side without
+         * wrapping, which on a moving dish would reflow line by line and read as a fault.
+         * Each column is a 4.5rem label plus the widest value on it, which is the headline
+         * "360.00" and its degree sign: 7ch at 26px is 109 px, so 72 + 8 + 109 = 189, two of
+         * them with a 20 px gap need 398, and the panel's padding and border take 26 more.
          * IBM Plex Mono advances 0.6em, so those ch figures are exact. */
         width: 480px;
         flex-shrink: 0;
@@ -545,13 +794,12 @@
         border: none;
         border-bottom: 2px solid transparent;
         border-radius: 0;
-        color: var(--muted);
+        color: var(--text);
         padding: 2px 4px 4px;
-        font-size: 15px;
+        font-size: 17px;
     }
 
     .chart-tabs button.active {
-        color: var(--text);
         border-bottom-color: var(--signal);
     }
 
