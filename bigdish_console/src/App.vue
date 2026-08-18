@@ -25,7 +25,6 @@
     // the list somebody curated.
     const configuredTargets = buildTargets(config);
     const targets = computed(() => [...configuredTargets, ...store.extraTargets]);
-    store.pollHz = config.status_poll_hz;
     const history = new TelemetryHistory((config.diagnostics?.window_minutes ?? 60) * 60);
     // Reactive so the panel's counters move; the rows themselves are plain objects inside it.
     const positionLog = reactive(new PositionLog(1 / config.status_poll_hz));
@@ -54,7 +53,8 @@
         // targets added by search, for this session only
         extraTargets: [],
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
-        pollHz: 0,       // the status poll rate, so panels can say what it is
+        // the status poll rate, so panels can say what interval they can actually manage
+        pollHz: config.status_poll_hz,
         lastError: '',
     });
 
