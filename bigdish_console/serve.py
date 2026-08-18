@@ -57,6 +57,49 @@ ELEMENTS_MAX_AGE_S = 6 * 3600
 # OMM, which is what CelesTrak serves now and what supersedes the two-line format. The JSON
 # form is what satellite.js reads directly.
 CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=JSON"
+CELESTRAK_SEARCH_URL = "https://celestrak.org/NORAD/elements/gp.php?{field}={value}&FORMAT=JSON"
+SIMBAD_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
+
+# Searches are answered from a short lived cache, and no two upstream searches are sent closer
+# together than this. Somebody leaning on the return key should not be able to make a nuisance
+# of us to CelesTrak or CDS, and both are answering out of the goodness of their hearts.
+SEARCH_CACHE_S = 120
+SEARCH_MIN_INTERVAL_S = 1.0
+SEARCH_LIMIT = 50
+_search_cache = {}
+_last_upstream_search = [0.0]
+
+
+def wildcard_between_letters_and_digits(text):
+    """
+    M87 -> M%87%, NGC4486 -> NGC%4486%
+
+    SIMBAD stores identifiers with padded spacing -- "M  87", "NGC  4486" -- so a prefix match
+    on what somebody types finds nothing. A wildcard wherever letters meet digits covers any
+    amount of padding. It matches more than it should, "M  187" among them, which is what the
+    list of candidates is for.
+    """
+    return re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", "%", text) + "%"
+
+
+def simbad_query(text):
+    """
+    One ADQL query covering every spelling worth trying, rather than one request per variant.
+
+    Identifiers are matched as typed and as SIMBAD's common-name form, which prefixes them
+    with "NAME " -- "crab" alone matches nothing, "NAME Crab" is the entry. Matching is case
+    sensitive and neither UPPER nor REPLACE is available here, so the casings are spelled out.
+    """
+    cased = list(dict.fromkeys([text, text.upper(), text.title()]))
+    patterns = []
+    for variant in cased:
+        escaped = wildcard_between_letters_and_digits(variant.replace("'", "''"))
+        patterns.append(f"i.id LIKE '{escaped}'")
+        patterns.append(f"i.id LIKE 'NAME%{escaped}'")
+    return (
+        f"SELECT DISTINCT TOP {SEARCH_LIMIT} b.main_id, b.ra, b.dec, b.otype_txt "
+        "FROM ident AS i JOIN basic AS b ON i.oidref = b.oid "
+        f"WHERE {' OR '.join(patterns)}")
 
 
 class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
@@ -100,6 +143,8 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
             # the old name, kept working: an installed console that has not been rebuilt is
             # still asking for it
             self.serve_omm(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/search":
+            self.serve_search(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/omm":
             self.serve_omm(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/config.json":
@@ -132,6 +177,64 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def fetch_search(self, url, cache_key):
+        """Fetch a search, from the cache when it is fresh, and never faster than the limit."""
+        cached = _search_cache.get(cache_key)
+        if cached and time.time() - cached[0] < SEARCH_CACHE_S:
+            return cached[1]
+
+        wait = SEARCH_MIN_INTERVAL_S - (time.time() - _last_upstream_search[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_upstream_search[0] = time.time()
+
+        request = urllib.request.Request(url, headers={"User-Agent": "BigDishConsole/0.1"})
+        with urllib.request.urlopen(request, timeout=25) as response:
+            body = response.read().decode("utf-8", errors="replace")
+        _search_cache[cache_key] = (time.time(), body)
+        return body
+
+    def serve_search(self, query):
+        """Search CelesTrak by name or international designator, or SIMBAD by identifier."""
+        catalogue = (query.get("catalogue") or [""])[0]
+        text = (query.get("q") or [""])[0].strip()
+        if not 2 <= len(text) <= 64:
+            self.send_error(400, "search text must be between 2 and 64 characters")
+            return
+
+        if catalogue == "satellite":
+            field = "INTDES" if re.fullmatch(r"\d{4}-\d{3}[A-Z]{0,3}", text.upper()) else "NAME"
+            url = CELESTRAK_SEARCH_URL.format(
+                field=field, value=urllib.parse.quote(text))
+        elif catalogue == "simbad":
+            url = SIMBAD_URL + "?" + urllib.parse.urlencode({
+                "request": "doQuery", "lang": "adql", "format": "json",
+                "query": simbad_query(text)})
+        else:
+            self.send_error(400, "catalogue must be satellite or simbad")
+            return
+
+        try:
+            body = self.fetch_search(url, f"{catalogue}:{text}")
+        except urllib.error.HTTPError as e:
+            # CelesTrak answers an unmatched name with 404, which is an empty result, not a
+            # fault; SIMBAD reports a bad query as a VOTable document, handled by the client
+            if e.code == 404:
+                body = "[]"
+            else:
+                self.send_error(502, f"{catalogue} search returned HTTP {e.code}")
+                return
+        except OSError:
+            self.send_error(502, f"could not reach the {catalogue} catalogue")
+            return
+
+        encoded = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
 
     def serve_omm(self, query):
         """
