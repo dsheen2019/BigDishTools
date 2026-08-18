@@ -68,11 +68,12 @@
                 <input id="cmd-duration" type="number" min="1" v-model="duration"
                        :disabled="!frame.track" />
                 <span class="data seconds">s</span>
+                <!-- the buttons ride on this row: the duration only fills a third of it -->
+                <div class="buttons">
+                    <button :disabled="!canMove" @click="goto_">Go to</button>
+                    <button :disabled="!canMove || !frame.track" @click="track">Track</button>
+                </div>
             </div>
-        </div>
-        <div class="buttons">
-            <button :disabled="!canMove" @click="goto_">Go to</button>
-            <button :disabled="!canMove || !frame.track" @click="track">Track</button>
         </div>
         <!-- one line, which is all either of these needs; a longer one ellipsises rather
              than pushing the panels below it down -->
@@ -120,7 +121,7 @@
     .buttons {
         display: flex;
         gap: 8px;
-        margin-top: 4px;
+        margin-left: auto;   /* pushed to the end of the duration row */
     }
 
     .hint {
