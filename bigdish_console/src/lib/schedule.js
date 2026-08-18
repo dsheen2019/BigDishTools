@@ -19,6 +19,11 @@
 
 const LOOKAHEAD_S = 5;      // how far in advance a row is handed over
 const TICK_MS = 500;
+// A row whose moment has gone by more than this is skipped rather than sent. executeat in the
+// past is not a command to point somewhere in the past -- it is a command to go there now, out
+// of order, which for a file describing a moving target means chasing where it used to be.
+// Rows fall behind when a file is queued late, or when the browser throttles a background tab.
+const STALE_S = 3;
 
 export class Schedule {
     // send(row, durationSeconds) delivers one row; hold() stops the dish where it is;
@@ -32,6 +37,7 @@ export class Schedule {
         this.state = "idle";
         this.file = null;
         this.sent = 0;
+        this.skipped = 0;
         this.message = "";
         this.timer = null;
         this.connected = true;
@@ -53,6 +59,7 @@ export class Schedule {
         this.cancel({ quiet: true });
         this.file = file;
         this.sent = 0;
+        this.skipped = 0;
         this.state = "queued";
         this.message = "";
         this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -120,6 +127,11 @@ export class Schedule {
             // left without a command between rows
             const duration = next ? next.time - row.time + 1 : 1;
             this.sent++;
+
+            if (row.time < now - STALE_S) {
+                this.skipped++;
+                continue;
+            }
             try {
                 const response = await this.send(row, duration);
                 if (response && response.success === false) {
@@ -134,7 +146,11 @@ export class Schedule {
         }
 
         if (this.sent >= this.file.rows.length && now > this.endsAt) {
-            this.stop("finished", `Ran all ${this.file.rows.length} rows.`);
+            const ran = this.file.rows.length - this.skipped;
+            this.stop("finished", this.skipped
+                ? `Ran ${ran} of ${this.file.rows.length} rows; ${this.skipped} were already `
+                  + "past by the time they came up and were skipped."
+                : `Ran all ${this.file.rows.length} rows.`);
         }
     }
 
@@ -145,9 +161,11 @@ export class Schedule {
                 const wait = Math.max(0, this.startsAt - now);
                 return `${this.file.name}: ${this.file.rows.length} rows, starts in ${formatWait(wait)}.`;
             }
-            case "running":
-                return `${this.file.name}: row ${this.sent} of ${this.file.rows.length}, `
+            case "running": {
+                const skipped = this.skipped ? `, ${this.skipped} skipped as stale` : "";
+                return `${this.file.name}: row ${this.sent} of ${this.file.rows.length}${skipped}, `
                     + `${formatWait(Math.max(0, this.endsAt - now))} left.`;
+            }
             case "finished":
             case "cancelled":
             case "failed":

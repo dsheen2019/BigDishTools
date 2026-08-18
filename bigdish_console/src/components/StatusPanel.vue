@@ -68,7 +68,9 @@
             </tbody>
         </table>
         <p class="active-command">{{ activeCommandText }}</p>
-        <p v-if="store.schedule?.text" class="schedule">
+        <!-- live state only: a file that has run its course belongs in the utilities tab,
+             not sitting in the sidebar afterwards. A failure stays, since it wants attention. -->
+        <p v-if="['queued', 'running', 'failed'].includes(store.schedule?.state)" class="schedule">
             <span :class="store.schedule.state === 'running' ? 'running' : ''">{{ store.schedule.text }}</span>
             <button v-if="['queued', 'running'].includes(store.schedule.state)"
                     class="signal small" @click="emit('cancel-file')">Cancel</button>

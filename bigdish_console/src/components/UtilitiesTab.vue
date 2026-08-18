@@ -34,6 +34,11 @@
         event.target.value = '';
     }
 
+    function clearPointing() {
+        pointing.value = null;
+        pointingError.value = '';
+    }
+
     const clock = (seconds) =>
         new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ') + 'Z';
 
@@ -134,9 +139,28 @@
                             @click="emit('queue-file', pointing)">Queue</button>
                     <button v-if="['queued', 'running'].includes(pointingState)" class="signal"
                             @click="emit('cancel-file')">Cancel</button>
+                    <!-- for the file that was not the one you meant to open. Only before it is
+                         handed over: once queued, the thing to press is Cancel. -->
+                    <button v-else @click="clearPointing">Clear</button>
                 </div>
             </template>
             <p v-if="store.schedule?.text" class="hint data">{{ store.schedule.text }}</p>
+        </div>
+
+        <!-- under the pointing file, being the other thing you hand the console from disk -->
+        <div class="panel column load">
+            <h2 class="panel-title">Load an ephemeris</h2>
+            <label for="ephemeris-file">File</label>
+            <!-- .asc is what NASA names its OEM files. The list is only what the file
+                 dialog offers first; what a file actually is gets worked out by reading it. -->
+            <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm,.asc,.e"
+                   @change="readFile" />
+            <p :class="fileFailed ? 'error-text' : 'hint'">
+                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM (.oem, or .asc as NASA'
+                    + ' names them). Elements are propagated;'
+                    + ' a table of state vectors is interpolated between, so it points where'
+                    + ' whoever produced the file says, not where SGP4 guesses.' }}
+            </p>
         </div>
         </div>
 
@@ -160,21 +184,6 @@
         </div>
 
         <div class="stack">
-        <div class="panel column load">
-            <h2 class="panel-title">Load an ephemeris</h2>
-            <label for="ephemeris-file">File</label>
-            <!-- .asc is what NASA names its OEM files. The list is only what the file
-                 dialog offers first; what a file actually is gets worked out by reading it. -->
-            <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm,.asc,.e"
-                   @change="readFile" />
-            <p :class="fileFailed ? 'error-text' : 'hint'">
-                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM (.oem, or .asc as NASA'
-                    + ' names them). Elements are propagated;'
-                    + ' a table of state vectors is interpolated between, so it points where'
-                    + ' whoever produced the file says, not where SGP4 guesses.' }}
-            </p>
-        </div>
-
         <div class="panel column log">
             <h2 class="panel-title">
                 Log position
