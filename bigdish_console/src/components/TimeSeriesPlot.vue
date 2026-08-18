@@ -67,6 +67,19 @@
         return magnitude * 10;
     }
 
+    // The fewest decimal places that write the step exactly. Bracketing by magnitude instead
+    // -- two places under 0.1, one under 1 -- turns a 0.25 step into ticks reading 0.3, 0.5,
+    // 0.8, which are not where the lines are.
+    function decimalsFor(step) {
+        for (let places = 0; places <= 6; places++) {
+            const scaled = step * 10 ** places;
+            if (Math.abs(scaled - Math.round(scaled)) < 1e-9) {
+                return places;
+            }
+        }
+        return 6;
+    }
+
     function draw() {
         const canvas = canvasEl.value;
         if (!canvas || !wrapEl.value) return;
@@ -129,7 +142,7 @@
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
         const step = niceStep(bounds.high - bounds.low, 4);
-        const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+        const decimals = decimalsFor(step);
         for (let value = Math.ceil(bounds.low / step) * step; value <= bounds.high; value += step) {
             const y = yOf(value);
             ctx.strokeStyle = colour.grid;
