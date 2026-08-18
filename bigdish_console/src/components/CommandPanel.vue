@@ -75,12 +75,8 @@
                 </div>
             </div>
         </div>
-        <!-- one line, which is all either of these needs; a longer one ellipsises rather
-             than pushing the panels below it down -->
-        <div class="messages reserve-1">
-            <p v-if="parseError" class="error-text one-line" :title="parseError">{{ parseError }}</p>
-            <p v-else-if="!canMove" class="hint one-line">Connect with control to move the dish.</p>
-        </div>
+        <!-- only when an entry did not parse; nothing is held open for it -->
+        <p v-if="parseError" class="error-text one-line message" :title="parseError">{{ parseError }}</p>
     </div>
 </template>
 
@@ -124,18 +120,14 @@
         margin-left: auto;   /* pushed to the end of the duration row */
     }
 
-    .hint {
-        font-size: 12px;
-        color: var(--muted);
+    /* the buttons sit on the last row, and nothing follows it */
+    .row:last-child {
+        margin-bottom: 0;
+    }
+
+    .message {
         margin: 8px 0 0;
-    }
-
-    .messages {
-        margin-top: 8px;
         font-size: 12px;
-    }
-
-    .messages p {
-        margin: 0;
+        line-height: 1.4;
     }
 </style>
