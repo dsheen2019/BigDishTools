@@ -29,16 +29,13 @@ the work is done and the README covers what was built.
   (EME2000, UTC, km), interpolates the states with a cubic spline, converts to az/el through
   astropy, and writes the pointing-file CSV above.
 
-## 0. OMM instead of TLE
+## 0. OMM instead of TLE — done
 
-Do first: everything in part 3 depends on it, and TLEs are formally obsolete.
-
-- `/tle` becomes `/omm`, fetching `FORMAT=JSON` and caching the JSON body.
-- `targets.js` and `ephemeris.js` swap `twoline2satrec` for `json2satrec`; `spec.tle` becomes
-  `spec.omm`; the cache key changes with it.
-- Keep reading an existing cached TLE if one is found, so nobody's cache breaks on upgrade.
-
-Mechanical, and the only part that touches code already in use.
+`/omm` fetches `FORMAT=JSON` and caches it; `/tle` still answers, for a console that has not
+been rebuilt. `json2satrec` reads the elements, `twoline2satrec` still handles a TLE if that is
+what a spec carries. Verified against the TLE it replaces: the two propagate to within
+1.2e-5 degrees over ninety minutes, which is the formats' storage precision differing rather
+than anything meaningful.
 
 ## 1. Run a pointing file
 

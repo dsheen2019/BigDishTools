@@ -98,8 +98,10 @@ Target types:
 - `body` — a solar-system body by name (astronomy-engine); tracked by strobing
   `goto_posvel` az/el commands from a Web Worker, like
   `example_pointing_scripts/moon_tracker.py`.
-- `satellite` — a NORAD catalog number; TLE from CelesTrak, propagated with satellite.js
-  (SGP4), strobed the same way.
+- `satellite` — a NORAD catalog number; orbital elements from CelesTrak as OMM, propagated
+  with satellite.js (SGP4), strobed the same way. OMM supersedes the two-line format, which
+  cannot carry catalog numbers past five digits; a TLE is still accepted if that is what you
+  have.
 
 ## Themes
 

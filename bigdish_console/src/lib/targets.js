@@ -68,8 +68,8 @@ export function buildTargets(config) {
                     category: "Satellites",
                     kind: "strobe",
                     catnr: entry.catnr,
-                    // spec.tle is filled in by fetchTLE just before tracking starts
-                    spec: { type: "satellite", tle: null },
+                    // spec.omm is filled in by fetchElements just before tracking starts
+                    spec: { type: "satellite", omm: null },
                 };
             default:
                 throw new Error(`Unknown target type "${entry.type}" in config.json.`);
@@ -77,28 +77,32 @@ export function buildTargets(config) {
     });
 }
 
-// Fetch a TLE through the local /tle endpoint (vite dev proxy or serve.py), caching in
-// localStorage so repeated sessions don't hammer CelesTrak.
-export async function fetchTLE(catnr, maxAgeHours) {
-    const cacheKey = `tle:${catnr}`;
+// Fetch orbital elements through the local /omm endpoint (vite dev proxy or serve.py),
+// caching in localStorage so repeated sessions don't hammer CelesTrak.
+//
+// OMM is what CelesTrak serves now; the two-line format it supersedes is deprecated, and
+// cannot represent catalog numbers past five digits. satellite.js reads the JSON form
+// directly, so nothing is parsed here beyond checking it is what it claims to be.
+export async function fetchElements(catnr, maxAgeHours) {
+    const cacheKey = `omm:${catnr}`;
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-        const { fetched, lines } = JSON.parse(cached);
+        const { fetched, omm } = JSON.parse(cached);
         if (Date.now() - fetched < maxAgeHours * 3600 * 1000) {
-            return lines;
+            return omm;
         }
     }
 
-    const response = await fetch(`/tle?catnr=${encodeURIComponent(catnr)}`);
+    const response = await fetch(`/omm?catnr=${encodeURIComponent(catnr)}`);
     if (!response.ok) {
-        throw new Error(`TLE fetch for catalog number ${catnr} failed (HTTP ${response.status}).`);
+        throw new Error(
+            `Element fetch for catalog number ${catnr} failed (HTTP ${response.status}).`);
     }
-    const text = (await response.text()).trim();
-    const rows = text.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-    const lines = rows.filter((line) => /^[12] /.test(line));
-    if (lines.length < 2) {
-        throw new Error(`CelesTrak returned no TLE for catalog number ${catnr}: "${text.slice(0, 80)}"`);
+    const elements = await response.json();
+    const omm = Array.isArray(elements) ? elements[0] : elements;
+    if (!omm || !Number.isFinite(omm.MEAN_MOTION)) {
+        throw new Error(`CelesTrak returned no usable elements for catalog number ${catnr}.`);
     }
-    localStorage.setItem(cacheKey, JSON.stringify({ fetched: Date.now(), lines }));
-    return lines;
+    localStorage.setItem(cacheKey, JSON.stringify({ fetched: Date.now(), omm }));
+    return omm;
 }

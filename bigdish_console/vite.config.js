@@ -58,15 +58,15 @@ export default defineConfig({
             allow: [fileURLToPath(new URL('..', import.meta.url))],
         },
         proxy: {
-            // Same-origin TLE endpoint so the browser never talks to CelesTrak directly
-            // (avoids CORS and keeps the door open for caching). serve.py implements the
-            // identical endpoint, with a disk cache, for production use.
-            '/tle': {
+            // Same-origin elements endpoint so the browser never talks to CelesTrak
+            // directly, which it could not anyway: CelesTrak sends no CORS header. serve.py
+            // implements the identical endpoint, with a disk cache, for production use.
+            '/omm': {
                 target: 'https://celestrak.org',
                 changeOrigin: true,
                 rewrite: (path) => {
                     const catnr = new URLSearchParams(path.split('?')[1]).get('catnr')
-                    return `/NORAD/elements/gp.php?CATNR=${encodeURIComponent(catnr)}&FORMAT=TLE`
+                    return `/NORAD/elements/gp.php?CATNR=${encodeURIComponent(catnr)}&FORMAT=JSON`
                 },
             },
         },

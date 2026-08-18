@@ -1,7 +1,7 @@
 <script setup>
     import { reactive, ref, computed, watchEffect, onUnmounted } from 'vue';
     import { DishClient } from '@client/bigdish_client.js';
-    import { buildTargets, fetchTLE } from './lib/targets.js';
+    import { buildTargets, fetchElements } from './lib/targets.js';
     import { isZeroOffset, offsetAzEl, offsetFixedPosition } from './lib/offset.js';
     import { fixedFrameAzEl, makeAzElFunction } from './lib/ephemeris.js';
     import { TelemetryHistory } from './lib/history.js';
@@ -273,7 +273,7 @@
         const spec = { ...target.spec };
         try {
             if (spec.type === 'satellite') {
-                spec.tle = await fetchTLE(target.catnr, config.tle_max_age_hours);
+                spec.omm = await fetchElements(target.catnr, config.tle_max_age_hours);
             }
         } catch (error) {
             store.strobe = { name: target.name, active: false, error: error.message };

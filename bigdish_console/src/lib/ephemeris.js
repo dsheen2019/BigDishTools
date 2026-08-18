@@ -27,7 +27,12 @@ export function makeAzElFunction(spec, site) {
     }
 
     if (spec.type === "satellite") {
-        const satrec = satellite.twoline2satrec(spec.tle[0], spec.tle[1]);
+        // OMM is what CelesTrak serves now and what the two-line format has been superseded
+        // by; a TLE is still accepted, since a cached one or a hand-pasted one is still a
+        // perfectly good set of elements.
+        const satrec = spec.omm
+            ? satellite.json2satrec(spec.omm)
+            : satellite.twoline2satrec(spec.tle[0], spec.tle[1]);
         const observerGd = {
             latitude: satellite.degreesToRadians(site.latitude),
             longitude: satellite.degreesToRadians(site.longitude),

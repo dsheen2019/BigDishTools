@@ -1,7 +1,7 @@
 <script setup>
     import { ref, computed, watch, onUnmounted } from 'vue';
     import { makeAzElFunction, fixedFrameAzEl } from '../lib/ephemeris.js';
-    import { fetchTLE } from '../lib/targets.js';
+    import { fetchElements } from '../lib/targets.js';
     import { formatDeg } from '../lib/format.js';
 
     const props = defineProps(['store', 'targets', 'config']);
@@ -73,9 +73,9 @@
 
         const spec = { ...target.spec };
         if (spec.type === 'satellite') {
-            preview.value = 'fetching TLE…';
+            preview.value = 'fetching elements…';
             try {
-                spec.tle = await fetchTLE(target.catnr, props.config.tle_max_age_hours);
+                spec.omm = await fetchElements(target.catnr, props.config.tle_max_age_hours);
             } catch (error) {
                 if (generation === previewGeneration) preview.value = error.message;
                 return;

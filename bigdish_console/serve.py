@@ -2,10 +2,10 @@
 '''
 Local-only server for the built console.
 
-Serves the vite build output (dist/) on 127.0.0.1 and provides the same /tle endpoint the
-vite dev server proxies: it fetches a TLE from CelesTrak by catalog number and caches it
-on disk, so repeated sessions are polite to CelesTrak and satellite tracking still works
-briefly offline.
+Serves the vite build output (dist/) on 127.0.0.1 and provides the same /omm endpoint the
+vite dev server proxies: it fetches orbital elements from CelesTrak by catalog number and
+caches them on disk, so repeated sessions are polite to CelesTrak and satellite tracking still
+works briefly offline.
 
 The config is served from a file of its own rather than from the build output, so there is
 one copy of it and it can be edited, or swapped for another with --config, without rebuilding
@@ -23,6 +23,7 @@ import json
 import sys
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -52,8 +53,10 @@ def read_config(path):
             "or `pip install tomli`, or point --config at a .json file.")
     return tomllib.loads(path.read_text(encoding="utf-8"))
 CACHE_DIR = APP_DIR / ".tle_cache"
-TLE_MAX_AGE_S = 6 * 3600
-CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=TLE"
+ELEMENTS_MAX_AGE_S = 6 * 3600
+# OMM, which is what CelesTrak serves now and what supersedes the two-line format. The JSON
+# form is what satellite.js reads directly.
+CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=JSON"
 
 
 class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
@@ -94,7 +97,11 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/tle":
-            self.serve_tle(urllib.parse.parse_qs(parsed.query))
+            # the old name, kept working: an installed console that has not been rebuilt is
+            # still asking for it
+            self.serve_omm(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/omm":
+            self.serve_omm(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/config.json":
             self.serve_config()
         else:
@@ -126,36 +133,70 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def serve_tle(self, query):
+    def serve_omm(self, query):
+        """
+        Orbital elements for one satellite, as OMM JSON.
+
+        Proxied rather than fetched by the page because CelesTrak sends no CORS header, and
+        cached on disk so that repeated sessions are polite to them and a satellite stays
+        trackable through a short outage.
+        """
         catnr = (query.get("catnr") or [""])[0]
         if not re.fullmatch(r"\d{1,9}", catnr):
             self.send_error(400, "catnr must be a NORAD catalog number")
             return
 
         CACHE_DIR.mkdir(exist_ok=True)
-        cache_file = CACHE_DIR / f"{catnr}.tle"
-        tle = None
-        if cache_file.exists() and time.time() - cache_file.stat().st_mtime < TLE_MAX_AGE_S:
-            tle = cache_file.read_text()
+        cache_file = CACHE_DIR / f"{catnr}.omm.json"
+        elements = None
+        fresh = cache_file.exists() and time.time() - cache_file.stat().st_mtime < ELEMENTS_MAX_AGE_S
+        if fresh:
+            elements = cache_file.read_text()
         else:
             try:
                 request = urllib.request.Request(
                     CELESTRAK_URL.format(catnr=catnr),
                     headers={"User-Agent": "BigDishConsole/0.1"})
                 with urllib.request.urlopen(request, timeout=20) as response:
-                    tle = response.read().decode("utf-8")
-                cache_file.write_text(tle)
-            except OSError:
-                # CelesTrak unreachable: fall back to a stale cache if there is one.
-                if cache_file.exists():
-                    tle = cache_file.read_text()
-                else:
-                    self.send_error(502, "CelesTrak unreachable and no cached TLE")
+                    elements = response.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                # 404 here means there is no such satellite, which is not a network problem
+                # and should not be reported as one. HTTPError is an OSError, so this has to
+                # come first or it would be swallowed by the branch below.
+                if e.code == 404:
+                    self.send_error(
+                        404, f"CelesTrak has no orbital elements for catalog number {catnr}")
                     return
+                if cache_file.exists():
+                    elements = cache_file.read_text()
+                else:
+                    self.send_error(502, f"CelesTrak returned HTTP {e.code} and nothing is cached")
+                    return
+            except OSError:
+                # unreachable: a stale cache beats nothing at all
+                if cache_file.exists():
+                    elements = cache_file.read_text()
+                else:
+                    self.send_error(502, "CelesTrak unreachable and no cached elements")
+                    return
+            else:
+                # An unknown catalog number is answered with "No GP data found", as prose and
+                # with a 200, so the reply has to be inspected rather than trusted. Say the
+                # satellite is unknown, which is what it means, rather than blaming the network
+                # as a fallthrough to the branch above would.
+                try:
+                    parsed = json.loads(elements)
+                except json.JSONDecodeError:
+                    parsed = None
+                if not isinstance(parsed, list) or not parsed:
+                    self.send_error(
+                        404, f"CelesTrak has no orbital elements for catalog number {catnr}")
+                    return
+                cache_file.write_text(elements)
 
-        body = tle.encode("utf-8")
+        body = elements.encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
