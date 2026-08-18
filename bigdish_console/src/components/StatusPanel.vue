@@ -1,54 +1,95 @@
 <script setup>
     import { computed } from 'vue';
-    import { formatDeg, degToHMS, degToDMS } from '../lib/format.js';
+    import { fixedNumber, degToHMS, degToDMS } from '../lib/format.js';
     import { isZeroOffset, describeOffset } from '../lib/offset.js';
 
     const props = defineProps(['store']);
 
     const offsetActive = computed(() => !isZeroOffset(props.store.offset));
 
+    // How each quantity is written. Every figure on a line is the same width whatever the
+    // reading, so the only thing that moves in this panel is the digits themselves.
+    const LONGITUDE = { digits: 3, decimals: 2, sign: 'none' };    // 0 to 360: az, ra, l
+    const LATITUDE = { digits: 2, decimals: 2 };                   // el, dec, b
+    const RATE = { digits: 2, decimals: 3 };                       // deg/s, up to 30
+    const VOLTS = { digits: 2, decimals: 1 };
+    const AMPS = { digits: 2, decimals: 2, sign: 'always' };       // read for direction
+
+    const num = (value, options) => fixedNumber(value, options);
 </script>
 
 <template>
     <div class="panel">
         <h2 class="panel-title">Position</h2>
-        <div class="readout-main data">
-            <div class="axis">
-                <span class="axis-label">az</span>
-                <span class="axis-value">{{ formatDeg(store.azel?.az) }}<span class="unit">°</span></span>
-                <span class="axis-vel">{{ formatDeg(store.azel?.az_vel, 3) }}°/s</span>
+        <!-- Two columns, one per axis, each field labelled beside itself. Everything below
+             the headline is on the same grid, so az, ra, l and the volts start at the same
+             place down the panel, as do el, dec, b and their amps. -->
+        <div class="readout data">
+            <div class="field big">
+                <span class="key">az</span>
+                <span class="value">{{ num(store.azel?.az, LONGITUDE) }}<span class="unit">°</span></span>
             </div>
-            <div class="axis">
-                <span class="axis-label">el</span>
-                <span class="axis-value">{{ formatDeg(store.azel?.el) }}<span class="unit">°</span></span>
-                <span class="axis-vel">{{ formatDeg(store.azel?.el_vel, 3) }}°/s</span>
+            <div class="field big">
+                <span class="key">el</span>
+                <span class="value">{{ num(store.azel?.el, LATITUDE) }}<span class="unit">°</span></span>
+            </div>
+
+            <div class="field">
+                <span class="key">az vel</span>
+                <span class="value">{{ num(store.azel?.az_vel, RATE) }}<span class="unit">°/s</span></span>
+            </div>
+            <div class="field">
+                <span class="key">el vel</span>
+                <span class="value">{{ num(store.azel?.el_vel, RATE) }}<span class="unit">°/s</span></span>
+            </div>
+
+            <div class="field">
+                <span class="key">ra</span>
+                <span class="value">{{ num(store.radec?.ra, LONGITUDE) }}<span class="unit">°</span></span>
+            </div>
+            <div class="field">
+                <span class="key">dec</span>
+                <span class="value">{{ num(store.radec?.dec, LATITUDE) }}<span class="unit">°</span></span>
+            </div>
+
+            <!-- the same right ascension and declination in the units they are spoken in -->
+            <div class="field">
+                <span class="key"></span>
+                <span class="value alt">{{ degToHMS(store.radec?.ra ?? NaN) }}</span>
+            </div>
+            <div class="field">
+                <span class="key"></span>
+                <span class="value alt">{{ degToDMS(store.radec?.dec ?? NaN) }}</span>
+            </div>
+
+            <div class="field">
+                <span class="key">l</span>
+                <span class="value">{{ num(store.gal?.l, LONGITUDE) }}<span class="unit">°</span></span>
+            </div>
+            <div class="field">
+                <span class="key">b</span>
+                <span class="value">{{ num(store.gal?.b, LATITUDE) }}<span class="unit">°</span></span>
+            </div>
+
+            <!-- the motors are here whether or not the server is sending power readings: a
+                 line arriving mid-observation would shove everything below it down -->
+            <div class="field" :class="{ hidden: !store.power }">
+                <span class="key">az motor</span>
+                <span class="value">{{ num(store.power?.az_voltage, VOLTS) }}<span class="unit">V</span>
+                    {{ num(store.power?.az_current, AMPS) }}<span class="unit">A</span></span>
+            </div>
+            <div class="field" :class="{ hidden: !store.power }">
+                <span class="key">el motor</span>
+                <span class="value">{{ num(store.power?.el_voltage, VOLTS) }}<span class="unit">V</span>
+                    {{ num(store.power?.el_current, AMPS) }}<span class="unit">A</span></span>
+            </div>
+
+            <div class="field wide" :class="{ hidden: !offsetActive }">
+                <span class="key">offset</span>
+                <span class="value offset">{{ offsetActive ? describeOffset(store.offset) : '\u2014' }}</span>
             </div>
         </div>
-        <table class="frames data">
-            <tbody>
-                <tr>
-                    <th>ra / dec</th>
-                    <td><span class="figure">{{ formatDeg(store.radec?.ra, 3) }}°</span> <span class="alt">{{ degToHMS(store.radec?.ra ?? NaN) }}</span></td>
-                    <td><span class="figure">{{ formatDeg(store.radec?.dec, 3) }}°</span> <span class="alt">{{ degToDMS(store.radec?.dec ?? NaN) }}</span></td>
-                </tr>
-                <tr>
-                    <th>l / b</th>
-                    <td><span class="figure">{{ formatDeg(store.gal?.l, 3) }}°</span></td>
-                    <td><span class="figure">{{ formatDeg(store.gal?.b, 3) }}°</span></td>
-                </tr>
-                <!-- these two rows are here whether or not they have anything to say: a row
-                     arriving mid-observation would shove the whole sidebar down a line -->
-                <tr :class="{ hidden: !store.power }">
-                    <th>motors</th>
-                    <td><span class="figure-small">{{ formatDeg(store.power?.az_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power?.az_current, 2) }}</span> A</td>
-                    <td><span class="figure-small">{{ formatDeg(store.power?.el_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power?.el_current, 2) }}</span> A</td>
-                </tr>
-                <tr :class="{ hidden: !offsetActive }">
-                    <th>offset</th>
-                    <td colspan="2" class="offset">{{ offsetActive ? describeOffset(store.offset) : '—' }}</td>
-                </tr>
-            </tbody>
-        </table>
+
         <!-- A glance at what is queued and nothing more: which file, how long until it starts
              or how far through it is. The whole state, and the buttons for doing anything
              about it, are in the utilities tab. Live state only -- a file that has run its
@@ -70,100 +111,59 @@
 </template>
 
 <style scoped>
-    /* Az and el sit side by side and stay there: reflowing onto two lines as the digits
-     * change looks like a fault on a moving dish. Every field below reserves the width of
-     * its widest possible value in ch, which is exact here because the readout is IBM Plex
-     * Mono with tabular figures, so the layout never moves while the numbers do. The
-     * sidebar width in App.vue is set to fit the total. */
-    .readout-main {
-        display: flex;
-        flex-wrap: nowrap;
-        gap: 8px 20px;
+    /* Two columns of labelled fields, az on the left and el on the right the whole way down.
+     * The label column is fixed so every value starts at the same place, and the values are
+     * IBM Plex Mono with tabular figures at a width the formatter guarantees, so nothing in
+     * here moves while the dish does. The sidebar width in App.vue is set to fit it. */
+    .readout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2px 20px;
         margin-bottom: 10px;
     }
 
-    .axis {
-        display: flex;
+    .field {
+        display: grid;
+        grid-template-columns: 4.5rem auto;
         align-items: baseline;
         gap: 8px;
         white-space: nowrap;
     }
 
-    .axis-label {
+    .field.wide {
+        grid-column: 1 / -1;
+    }
+
+    .key {
         font-family: var(--font-display);
         text-transform: uppercase;
         letter-spacing: 0.1em;
         color: var(--muted);
+        font-size: 11px;
+    }
+
+    .value {
+        font-size: 13px;
+    }
+
+    /* the headline pair, big enough to read from across the room */
+    .big {
+        align-items: baseline;
+        margin-bottom: 4px;
+    }
+
+    .big .key {
         font-size: 14px;
     }
 
-    .axis-value {
+    .big .value {
         font-size: 26px;
         font-weight: 600;
-        /* "-90.00" plus the degree sign: the widest either axis can be. Right aligned, and
-         * since the number of decimals never changes, that pins the decimal point and the
-         * degree sign; only the leading digits grow, leftwards into the reserved space. */
-        min-width: 7ch;
-        text-align: right;
     }
 
     .unit {
         color: var(--muted);
         font-weight: 400;
-    }
-
-    .axis-vel {
-        font-size: 11px;
-        color: var(--muted);
-        /* "-30.000°/s": the dish can manage 30 degrees a second, so allow the sign, five
-         * digits and the unit */
-        min-width: 10ch;
-        text-align: right;
-    }
-
-    /* Fixed layout, or each column sizes itself to its widest content and the columns shove
-     * each other sideways as the numbers change: ra crossing from 83.633 to 359.633 would
-     * move the whole dec column. The width is spent deliberately instead. */
-    .frames {
-        width: 100%;
-        table-layout: fixed;
-        border-collapse: collapse;
-        font-size: 12px;
-    }
-
-    .frames th {
-        width: 5rem;
-    }
-
-    /* A slot wide enough for "-359.633°", right aligned, so the figure ends in the same place
-     * whatever its magnitude and the hms/dms beside it never shifts. */
-    .figure {
-        display: inline-block;
-        min-width: 9ch;
-        text-align: right;
-    }
-
-    /* volts and amps: "-28.5", "-1.23" */
-    .figure-small {
-        display: inline-block;
-        min-width: 5ch;
-        text-align: right;
-    }
-
-    .frames th {
-        font-family: var(--font-display);
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-        text-align: left;
-        padding: 3px 8px 3px 0;
-        white-space: nowrap;
-    }
-
-    .frames td {
-        padding: 3px 8px 3px 0;
-        white-space: nowrap;
     }
 
     .alt {
