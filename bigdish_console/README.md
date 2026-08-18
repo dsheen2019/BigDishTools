@@ -137,6 +137,14 @@ objects whose identifiers also match. Searching happens when asked rather than a
 `serve.py` sends at most two requests per search, and it caches them for two minutes and never
 sends two closer together than a second — CelesTrak and CDS answer out of goodwill.
 
+The tab also logs the dish's position to a csv in the format `WR66_log_position.py` writes —
+same columns, same precision, same line endings — so anything that reads one of those reads
+this. It records the readings the status poll already collects rather than opening a second
+stream of requests, which has one consequence worth knowing: an interval finer than the poll
+period cannot be honoured, and one that is not a multiple of it is rounded to the nearest that
+is. The panel says what it settled on. Stretches where readings stopped arriving are counted
+and reported, since a gap in a log that looks continuous is worse than a short log.
+
 ## Sky tracks
 
 Selecting a target draws its path across the sky — rise to set, or a full 24 hours for

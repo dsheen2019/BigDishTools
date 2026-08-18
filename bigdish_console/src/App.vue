@@ -5,6 +5,7 @@
     import { isZeroOffset, offsetAzEl, offsetFixedPosition } from './lib/offset.js';
     import { fixedFrameAzEl, makeAzElFunction } from './lib/ephemeris.js';
     import { TelemetryHistory } from './lib/history.js';
+    import { PositionLog } from './lib/position_log.js';
     import { angleDiff } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
     import StatusPanel from './components/StatusPanel.vue';
@@ -24,7 +25,10 @@
     // the list somebody curated.
     const configuredTargets = buildTargets(config);
     const targets = computed(() => [...configuredTargets, ...store.extraTargets]);
+    store.pollHz = config.status_poll_hz;
     const history = new TelemetryHistory((config.diagnostics?.window_minutes ?? 60) * 60);
+    // Reactive so the panel's counters move; the rows themselves are plain objects inside it.
+    const positionLog = reactive(new PositionLog(1 / config.status_poll_hz));
 
     const client = ref(null);
     const showLogin = ref(true);
@@ -50,6 +54,7 @@
         // targets added by search, for this session only
         extraTargets: [],
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
+        pollHz: 0,       // the status poll rate, so panels can say what it is
         lastError: '',
     });
 
@@ -127,6 +132,7 @@
                         el_voltage: d.el_voltage, el_current: d.el_current,
                     };
                     recordSample(d);
+                    positionLog.record(d);
                 }
             } catch { /* transient; connection loss is handled by onstatechange */ }
             finally { pollInFlight = false; }
@@ -538,7 +544,8 @@
                            @set-radec="(ra, dec) => setEntry('radec', ra.toFixed(3), dec.toFixed(3))" />
                 <DiagnosticsTab v-show="tab === 'diagnostics'" :visible="tab === 'diagnostics'"
                                 :store="store" :config="config" :history="history" />
-                <UtilitiesTab v-show="tab === 'utilities'" :store="store" @add-target="addTarget" />
+                <UtilitiesTab v-show="tab === 'utilities'" :store="store" :log="positionLog"
+                              @add-target="addTarget" />
             </section>
         </main>
 

@@ -64,7 +64,7 @@ Integration is the awkward part, and most of the work:
 - The diagnostics error trace should follow the file: `expectedAzElAt` needs to return the
   current row's position while the schedule runs.
 
-## 2. Save a position log
+## 2. Save a position log — done
 
 Settled: log from the readings the console already polls, so nothing new is asked of the
 server. The requested interval is rounded to the nearest multiple of the status poll period —

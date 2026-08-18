@@ -9,10 +9,37 @@
     import SearchPicker from './SearchPicker.vue';
     import { readEphemerisFile } from '../lib/ephemeris_file.js';
 
-    const props = defineProps(['store']);
+    const props = defineProps(['store', 'log']);
     const emit = defineEmits(['add-target']);
 
     const added = computed(() => props.store.extraTargets ?? []);
+    const requestedInterval = ref(1.0);
+    const logPower = ref(true);
+    const snapped = computed(() => props.log.snap(Number(requestedInterval.value) || 0));
+    const logSummary = computed(() => {
+        const log = props.log;
+        if (!log.rows.length) {
+            return log.running ? 'Waiting for the first reading.' : 'Not logging.';
+        }
+        const span = log.span;
+        const minutes = span >= 60 ? `${(span / 60).toFixed(1)} min` : `${span.toFixed(0)} s`;
+        const missing = log.missingSeconds > 0
+            ? ` · ${log.gaps.length} gap${log.gaps.length > 1 ? 's' : ''}, `
+              + `${log.missingSeconds.toFixed(0)} s missing`
+            : '';
+        return `${log.rows.length} rows over ${minutes}${missing}`;
+    });
+
+    function saveLog() {
+        const blob = new Blob([props.log.toCsv()], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = props.log.suggestedFilename();
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
     const fileMessage = ref('');
     const fileFailed = ref(false);
 
@@ -68,6 +95,37 @@
             </p>
         </div>
 
+        <div class="panel column">
+            <h2 class="panel-title">
+                Log position
+                <span v-if="log.running" class="count data">recording</span>
+            </h2>
+            <div class="row">
+                <label for="log-interval">Every</label>
+                <input id="log-interval" type="number" min="0.2" step="0.2"
+                       v-model="requestedInterval" :disabled="log.running" />
+                <span class="data unit">s</span>
+            </div>
+            <label class="check">
+                <input type="checkbox" v-model="logPower" :disabled="log.running" />
+                include motor voltages and currents
+            </label>
+            <div class="row buttons">
+                <button v-if="!log.running" @click="log.start(Number(requestedInterval), logPower)">
+                    Start
+                </button>
+                <button v-else class="signal" @click="log.stop()">Stop</button>
+                <button :disabled="!log.rows.length" @click="saveLog">Save csv</button>
+            </div>
+            <p class="hint data">{{ logSummary }}</p>
+            <p class="hint">
+                Rounded to {{ snapped }} s, the nearest multiple of the
+                {{ (1 / (store.pollHz ?? 5)).toFixed(1) }} s status poll this logs from — it
+                records the readings the console already asks for rather than opening a second
+                stream. Same columns as WR66_log_position.py.
+            </p>
+        </div>
+
         <div class="panel added">
             <h2 class="panel-title">
                 Added this session
@@ -94,7 +152,7 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(4, 1fr);
         grid-template-rows: 1fr auto;
         gap: 10px;
         overflow-y: auto;
@@ -107,7 +165,40 @@
     }
 
     .added {
-        grid-column: 1 / 4;
+        grid-column: 1 / 5;
+    }
+
+    .check {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-transform: none;
+        letter-spacing: 0;
+        font-family: var(--font-body);
+        font-size: 12px;
+    }
+
+    .check input {
+        width: auto;
+    }
+
+    .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .row input[type="number"] {
+        width: 80px;
+    }
+
+    .buttons {
+        margin-top: 2px;
+    }
+
+    .unit {
+        color: var(--muted);
+        font-size: 12px;
     }
 
     input[type="file"] {
