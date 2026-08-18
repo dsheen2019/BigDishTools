@@ -137,6 +137,22 @@ objects whose identifiers also match. Searching happens when asked rather than a
 `serve.py` sends at most two requests per search, and it caches them for two minutes and never
 sends two closer together than a second — CelesTrak and CDS answer out of goodwill.
 
+It also runs a prepared pointing file — the csv `WR66_run_pointing_file.py` takes, and
+`oem_to_bigdish_commands.py` writes. The whole file is checked when loaded, by the same rules
+as the Python and reporting the offending line, because a row that is wrong in a way nobody
+notices until the dish drives into a limit is the thing to avoid. What it found is shown before
+anything is committed: rows, frames, when it starts and for how long, the step between rows,
+and the lowest elevation it commands.
+
+Rows are handed to the server as `track` commands carrying `executeat` rather than by waiting
+for each moment and firing. The server holds each until its time and applies it to the second,
+and since only the next few seconds are ever committed, cancelling means simply not sending
+the rest. A queued file leaves the dish alone until it starts, so ordinary commands still work;
+at its start time it stands down anything else running and **sets the pointing offset to zero**,
+so the file runs from a known state, and can be nudged by hand afterwards. Losing the
+connection while queued costs nothing unless it is still down when the file is due; losing it
+mid-run stops the file. The state and a cancel button sit in the sidebar, visible from any tab.
+
 The tab also logs the dish's position to a csv in the format `WR66_log_position.py` writes —
 same columns, same precision, same line endings — so anything that reads one of those reads
 this. It records the readings the status poll already collects rather than opening a second

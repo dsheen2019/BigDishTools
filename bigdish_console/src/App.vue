@@ -6,6 +6,7 @@
     import { fixedFrameAzEl, makeAzElFunction } from './lib/ephemeris.js';
     import { TelemetryHistory } from './lib/history.js';
     import { PositionLog } from './lib/position_log.js';
+    import { Schedule } from './lib/schedule.js';
     import { angleDiff } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
     import StatusPanel from './components/StatusPanel.vue';
@@ -52,6 +53,8 @@
         focus: null,
         // targets added by search, for this session only
         extraTargets: [],
+        // what a queued or running pointing file is doing, for the panels to show
+        schedule: { state: 'idle', text: '' },
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
         // the status poll rate, so panels can say what interval they can actually manage
         pollHz: config.status_poll_hz,
@@ -234,6 +237,8 @@
         const c = new DishClient(host, port);
         c.onstatechange = (state) => {
             store.state = state;
+            // a queued file rides out a brief outage; a running one cannot
+            schedule.setConnected(state === 'AUTHENTICATED' || state === 'INITIALIZED');
             if (state === 'DISCONNECTED' && client.value === c) {
                 stopStrobe('Connection to the dish server was lost.');
                 stopPolling();
@@ -341,6 +346,41 @@
         } else if (!error) {
             store.strobe = null;
         }
+    }
+
+    // --- a prepared pointing file ---
+    //
+    // Rows go to the server with executeat, so only the next few seconds are ever committed
+    // and cancelling means simply not sending the rest.
+
+    const schedule = new Schedule({
+        send: (row, duration) => client.value.track(
+            row.frame, row.coord1, row.coord2, duration, row.vel1, row.vel2, row.time),
+        hold: () => stopTracking(),
+        onStart: () => {
+            // a prepared file starts from a known state: whatever offset was left applied is
+            // not part of it, and anything else commanding the dish stands down
+            stopStrobe();
+            Object.assign(store.offset, { coord1: 0, coord2: 0 });
+            lastRequest = null;
+        },
+        onState: () => {
+            store.schedule = { state: schedule.state, text: schedule.describe() };
+            // the diagnostics error plot should measure against the file while it runs
+            if (schedule.state !== 'running') return;
+            const row = schedule.file?.rows[Math.max(0, schedule.sent - 1)];
+            if (!row) return;
+            if (row.frame === 'azel') expectFixed(row.coord1, row.coord2);
+            else expectSkyFrame(row.frame, row.coord1, row.coord2);
+        },
+    });
+
+    function queueFile(file) {
+        schedule.queue(file);
+    }
+
+    function cancelFile() {
+        schedule.cancel();
     }
 
     // --- commands from the panels ---
@@ -523,7 +563,7 @@
 
         <main>
             <aside>
-                <StatusPanel :store="store" />
+                <StatusPanel :store="store" @cancel-file="cancelFile" />
                 <CommandPanel :store="store" :entry="entry" @command="sendCommand" />
                 <TargetPanel :store="store" :targets="targets" :config="config"
                              @command="sendCommand" @start-strobe="trackTarget" @stop-strobe="stopStrobe" />
@@ -545,7 +585,8 @@
                 <DiagnosticsTab v-show="tab === 'diagnostics'" :visible="tab === 'diagnostics'"
                                 :store="store" :config="config" :history="history" />
                 <UtilitiesTab v-show="tab === 'utilities'" :store="store" :log="positionLog"
-                              @add-target="addTarget" />
+                              @add-target="addTarget" @queue-file="queueFile"
+                              @cancel-file="cancelFile" />
             </section>
         </main>
 

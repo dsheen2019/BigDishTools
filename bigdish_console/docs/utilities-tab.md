@@ -37,7 +37,7 @@ what a spec carries. Verified against the TLE it replaces: the two propagate to 
 1.2e-5 degrees over ninety minutes, which is the formats' storage precision differing rather
 than anything meaningful.
 
-## 1. Run a pointing file
+## 1. Run a pointing file — done
 
 - `src/lib/pointing_file.js` — parse and validate with the same rules as the Python, reporting
   the offending row number. A bad file is refused when loaded, not part way through.
@@ -83,7 +83,7 @@ Streaming to disk through `serve.py` would lift the memory ceiling and put the f
 machine at the radome rather than in a browser's downloads. Not now; note it here so the
 reason it was skipped is on record.
 
-## 3. Add a target: search or upload
+## 3. Add a target: search or upload — done
 
 One picker component and one temporary-target mechanism serve all of the following. Temporary
 targets live in `store.extraTargets`, are concatenated by `buildTargets`, and are marked in the

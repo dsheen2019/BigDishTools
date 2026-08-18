@@ -4,6 +4,7 @@
     import { isZeroOffset, describeOffset } from '../lib/offset.js';
 
     const props = defineProps(['store']);
+    const emit = defineEmits(['cancel-file']);
 
     const offsetActive = computed(() => !isZeroOffset(props.store.offset));
 
@@ -67,6 +68,11 @@
             </tbody>
         </table>
         <p class="active-command">{{ activeCommandText }}</p>
+        <p v-if="store.schedule?.text" class="schedule">
+            <span :class="store.schedule.state === 'running' ? 'running' : ''">{{ store.schedule.text }}</span>
+            <button v-if="['queued', 'running'].includes(store.schedule.state)"
+                    class="signal small" @click="emit('cancel-file')">Cancel</button>
+        </p>
         <p v-if="store.strobe && !store.strobe.active && store.strobe.error" class="error-text">{{ store.strobe.error }}</p>
         <p v-if="store.lastError" class="error-text">{{ store.lastError }}</p>
     </div>
@@ -175,6 +181,24 @@
 
     .offset {
         color: var(--signal);
+    }
+
+    .schedule {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .schedule .running {
+        color: var(--signal);
+    }
+
+    .schedule button.small {
+        font-size: 11px;
+        padding: 2px 8px;
     }
 
     .active-command {

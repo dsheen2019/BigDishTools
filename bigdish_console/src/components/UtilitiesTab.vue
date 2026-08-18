@@ -8,11 +8,41 @@
     import { computed, ref } from 'vue';
     import SearchPicker from './SearchPicker.vue';
     import { readEphemerisFile } from '../lib/ephemeris_file.js';
+    import { parsePointingFile, rowsInThePast } from '../lib/pointing_file.js';
+    import { formatWait } from '../lib/schedule.js';
 
     const props = defineProps(['store', 'log']);
-    const emit = defineEmits(['add-target']);
+    const emit = defineEmits(['add-target', 'queue-file', 'cancel-file']);
 
     const added = computed(() => props.store.extraTargets ?? []);
+    const pointing = ref(null);        // the parsed file, before anybody commits to it
+    const pointingError = ref('');
+    const pointingState = computed(() => props.store.schedule?.state ?? 'idle');
+
+    async function readPointingFile(event) {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        pointing.value = null;
+        pointingError.value = '';
+        try {
+            const parsed = parsePointingFile(file.name, await file.text());
+            parsed.past = rowsInThePast(parsed);
+            pointing.value = parsed;
+        } catch (error) {
+            pointingError.value = error.message;
+        }
+        event.target.value = '';
+    }
+
+    const clock = (seconds) =>
+        new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ') + 'Z';
+
+    const startsIn = computed(() => {
+        if (!pointing.value) return '';
+        const wait = pointing.value.summary.start - Date.now() / 1000;
+        return wait > 0 ? `starts in ${formatWait(wait)}` : `started ${formatWait(-wait)} ago`;
+    });
+
     const requestedInterval = ref(1.0);
     const logPower = ref(true);
     const snapped = computed(() => props.log.snap(Number(requestedInterval.value) || 0));
@@ -67,6 +97,49 @@
 
 <template>
     <div class="utilities">
+        <div class="stack">
+        <div class="panel column pointing">
+            <h2 class="panel-title">
+                Run a pointing file
+                <span v-if="pointingState !== 'idle'" class="count data">{{ pointingState }}</span>
+            </h2>
+            <label for="pointing-file">File</label>
+            <input id="pointing-file" type="file" accept=".csv,.txt" @change="readPointingFile" />
+
+            <p v-if="pointingError" class="error-text">{{ pointingError }}</p>
+
+            <template v-if="pointing">
+                <table class="frames data summary">
+                    <tbody>
+                        <tr><th>rows</th><td>{{ pointing.summary.count }}</td></tr>
+                        <tr><th>frames</th><td>{{ pointing.summary.frames.join(', ') }}</td></tr>
+                        <tr><th>starts</th><td>{{ clock(pointing.summary.start) }}</td></tr>
+                        <tr><th>runs for</th><td>{{ formatWait(pointing.summary.duration) }}</td></tr>
+                        <tr><th>step</th><td>{{ pointing.summary.shortestGap }}–{{ pointing.summary.longestGap }} s</td></tr>
+                        <tr v-if="pointing.summary.lowestElevation !== null">
+                            <th>lowest el</th><td>{{ pointing.summary.lowestElevation }}°</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p v-if="pointing.past" class="error-text">
+                    {{ pointing.past }} of {{ pointing.summary.count }} rows are already in the
+                    past and would be sent with a time that has gone.
+                </p>
+                <p v-else class="hint">{{ startsIn }}. The pointing offset is set to zero when
+                    it starts, so the file runs from a known state; it can be nudged by hand
+                    once running.</p>
+                <div class="row buttons">
+                    <button :disabled="store.state !== 'INITIALIZED' || pointingState === 'queued'
+                                || pointingState === 'running'"
+                            @click="emit('queue-file', pointing)">Queue</button>
+                    <button v-if="['queued', 'running'].includes(pointingState)" class="signal"
+                            @click="emit('cancel-file')">Cancel</button>
+                </div>
+            </template>
+            <p v-if="store.schedule?.text" class="hint data">{{ store.schedule.text }}</p>
+        </div>
+        </div>
+
         <div class="stack">
         <div class="panel column find-satellite">
             <h2 class="panel-title">Find a satellite</h2>
@@ -163,7 +236,7 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr 1fr;
         gap: 10px;
         overflow-y: auto;
     }
@@ -178,6 +251,16 @@
     .find-satellite, .find-source {
         flex: 1;
         min-height: 0;
+    }
+
+    .pointing {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    .summary th {
+        width: 5.5rem;
     }
 
     /* the list of what has been added takes whatever the two above it leave */
