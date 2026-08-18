@@ -273,16 +273,67 @@
         }
     }
 
+    // --- pointing at a target from the target list ---
+    //
+    // Two things can be asked of any target: go to where it is now, or follow it for a while.
+    // Which machinery does the following depends on the target, not on the operator: a fixed
+    // point on the sky is handed to the server, which knows how to follow one, and anything
+    // that moves against the sky -- a planet, a satellite, a table of state vectors -- is
+    // computed here and fed to the dish as a stream of positions. Both stop after the time in
+    // the Track for field.
+
+    // Where a target is at this moment, as a single command. For the ones that move, that
+    // means working out where they are first: by the time the dish arrives they will have
+    // moved on, which is what Track is for.
+    async function gotoTarget(target) {
+        if (target.kind !== 'strobe') {
+            return sendCommand({
+                action: 'goto', frame: target.frame,
+                coord1: target.coord1, coord2: target.coord2,
+            });
+        }
+        stopStrobe();
+        let azEl;
+        try {
+            const spec = { ...target.spec };
+            if (spec.type === 'satellite') {
+                spec.omm = await fetchElements(target.catnr, config.tle_max_age_hours);
+            }
+            azEl = makeAzElFunction(spec, config.site)(new Date());
+        } catch (error) {
+            store.lastError = error.message;
+            return;
+        }
+        if (!azEl) {
+            store.lastError = `${target.name} has no position solution for right now.`;
+            return;
+        }
+        return sendCommand({ action: 'goto', frame: 'azel', coord1: azEl.az, coord2: azEl.el });
+    }
+
+    // Follow a target for the given number of seconds.
+    async function trackTarget({ target, duration }) {
+        if (target.kind !== 'strobe') {
+            return sendCommand({
+                action: 'track', frame: target.frame,
+                coord1: target.coord1, coord2: target.coord2, duration,
+            });
+        }
+        lastRequest = { kind: 'strobe', target, until: Date.now() / 1000 + duration };
+        return startStrobe(target, duration);
+    }
+
     // --- strobe tracking (client-computed az/el targets: bodies, satellites) ---
 
     let worker = null;
+    let strobeTimer = null;
 
-    async function trackTarget(target) {
-        lastRequest = { kind: 'strobe', target };
-        return startStrobe(target);
-    }
+    // Every caller has a Track for value to pass; this is what a strobe runs for if one ever
+    // does not, rather than a missing number quietly becoming no time at all.
+    const DEFAULT_TRACK_S = 300;
 
-    async function startStrobe(target) {
+    async function startStrobe(target, seconds) {
+        const limit = Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_TRACK_S;
         if (store.state !== 'INITIALIZED') {
             store.lastError = 'Dish control is required to track. Reconnect with control.';
             return;
@@ -297,7 +348,15 @@
             store.strobe = { name: target.name, active: false, error: error.message };
             return;
         }
-        store.strobe = { name: target.name, active: true, az: null, el: null, up: null, error: '' };
+        // A strobe used to run until something stopped it. It now has an end, like the
+        // server's own track does, so a target followed by this console and one followed by
+        // the dish controller behave the same way from the panel.
+        const until = Date.now() / 1000 + limit;
+        store.strobe = {
+            name: target.name, active: true, until, az: null, el: null, up: null, error: '',
+        };
+        clearTimeout(strobeTimer);
+        strobeTimer = setTimeout(() => stopStrobe(), limit * 1000);
         store.focus = { name: target.name, spec };
         expectSpec(spec);
         worker = new Worker(new URL('./workers/strobe_worker.js', import.meta.url), { type: 'module' });
@@ -311,6 +370,12 @@
                     });
                 }
             } else if (message.type === 'command') {
+                // the timer above is the usual way this ends; this catches the case where a
+                // background tab has had its timers held back and one last position is due
+                if (Date.now() / 1000 >= until) {
+                    stopStrobe();
+                    return;
+                }
                 store.commandedAzEl = { az: message.az, el: message.el };
                 try {
                     const response = await client.value.goto_posvel(
@@ -337,6 +402,8 @@
     }
 
     function stopStrobe(error = '') {
+        clearTimeout(strobeTimer);
+        strobeTimer = null;
         if (worker) {
             worker.terminate();
             worker = null;
@@ -449,7 +516,7 @@
             name: `${command.frame === 'gal' ? 'l/b' : 'ra/dec'} `
                 + `${command.coord1.toFixed(3)}, ${command.coord2.toFixed(3)}`,
             spec,
-        });
+        }, command.duration);
     }
 
     // Stop whatever is tracking and hold position. There is no cancel message in the
@@ -474,7 +541,9 @@
             return;
         }
         if (lastRequest.kind === 'strobe') {
-            startStrobe(lastRequest.target);
+            // the remaining time, not a fresh helping of it
+            startStrobe(lastRequest.target,
+                Math.max(1, lastRequest.until - Date.now() / 1000));
         } else {
             issueCommand(lastRequest.command);
         }
@@ -582,7 +651,8 @@
                 <StatusPanel :store="store" />
                 <CommandPanel :store="store" :entry="entry" @command="sendCommand" />
                 <TargetPanel :store="store" :targets="targets" :config="config"
-                             @command="sendCommand" @start-strobe="trackTarget" @stop-strobe="stopStrobe" />
+                             @command="sendCommand" @goto-target="gotoTarget"
+                             @track-target="trackTarget" />
                 <OffsetPanel :store="store" @apply="applyOffset" />
                 <UsersPanel :client="client" :store="store" />
             </aside>
