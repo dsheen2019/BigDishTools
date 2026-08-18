@@ -114,6 +114,20 @@ chart itself is one drawing in two consoles. Everything around it follows the th
 the degree ring, whose background is simply left unpainted so the panel shows through. The
 star chart flips too, using VirtualSky's `negative` palette for black-on-white.
 
+## Finding targets
+
+The Utilities tab looks up things the config does not list. A satellite by name, catalog
+number or international designator from CelesTrak, or an astronomical source by name or
+designation from SIMBAD; either can be added to the Targets dropdown, where it behaves like
+anything else — sky path, offsets, tracking. Added targets belong to the session and are gone
+on reload; to keep one, put it in `config.toml`.
+
+Sources are resolved by the same CDS name resolver `astropy`'s `SkyCoord.from_name` uses,
+which is what makes "crab", "m87" and "sgr a*" work; the results below the first are other
+objects whose identifiers also match. Searching happens when asked rather than as you type,
+`serve.py` sends at most two requests per search, and it caches them for two minutes and never
+sends two closer together than a second — CelesTrak and CDS answer out of goodwill.
+
 ## Sky tracks
 
 Selecting a target draws its path across the sky — rise to set, or a full 24 hours for

@@ -59,6 +59,10 @@ ELEMENTS_MAX_AGE_S = 6 * 3600
 CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=JSON"
 CELESTRAK_SEARCH_URL = "https://celestrak.org/NORAD/elements/gp.php?{field}={value}&FORMAT=JSON"
 SIMBAD_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
+# The name resolver astropy's SkyCoord.from_name uses. It is forgiving about spacing and case
+# in a way that querying the tables directly is not -- "crab", "m87", "sgr a*" all resolve --
+# so it answers what the operator meant, and the table query below only supplies alternatives.
+SESAME_URL = "https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV"
 
 # Searches are answered from a short lived cache, and no two upstream searches are sent closer
 # together than this. Somebody leaning on the return key should not be able to make a nuisance
@@ -84,22 +88,46 @@ def wildcard_between_letters_and_digits(text):
 
 def simbad_query(text):
     """
-    One ADQL query covering every spelling worth trying, rather than one request per variant.
+    One ADQL query for alternatives to what the resolver found.
 
-    Identifiers are matched as typed and as SIMBAD's common-name form, which prefixes them
-    with "NAME " -- "crab" alone matches nothing, "NAME Crab" is the entry. Matching is case
-    sensitive and neither UPPER nor REPLACE is available here, so the casings are spelled out.
+    Every clause here has to be anchored at the start of an identifier. A pattern beginning
+    with a wildcard, a case insensitive regexp, or an OR of two differently shaped clauses each
+    turns this into a scan of the whole identifier table, which does not come back: measured at
+    over three minutes before being abandoned, against well under a second for the anchored
+    forms. So the query takes one shape or the other, chosen by what was typed, and never both.
+
+    A catalogue designation is matched by regexp, which absorbs the padding SIMBAD stores --
+    "M  87" for M87. Anything else is matched as a common name, which SIMBAD files under a
+    "NAME " prefix: "crab" matches nothing, "NAME Crab" is the entry.
     """
-    cased = list(dict.fromkeys([text, text.upper(), text.title()]))
-    patterns = []
-    for variant in cased:
-        escaped = wildcard_between_letters_and_digits(variant.replace("'", "''"))
-        patterns.append(f"i.id LIKE '{escaped}'")
-        patterns.append(f"i.id LIKE 'NAME%{escaped}'")
-    return (
-        f"SELECT DISTINCT TOP {SEARCH_LIMIT} b.main_id, b.ra, b.dec, b.otype_txt "
-        "FROM ident AS i JOIN basic AS b ON i.oidref = b.oid "
-        f"WHERE {' OR '.join(patterns)}")
+    escaped = text.replace("'", "''")
+    columns = "b.main_id, b.ra, b.dec, b.otype_txt"
+    table = "FROM ident AS i JOIN basic AS b ON i.oidref = b.oid"
+
+    if re.search(r"[A-Za-z]\s*\d|\d\s*[A-Za-z]", text):
+        pattern = re.sub(r"\s+", " *", escaped.upper())
+        pattern = re.sub(r"(?<=[A-Z])(?=\d)|(?<=\d)(?=[A-Z])", " *", pattern)
+        where = f"regexp(i.id, '^{pattern}') = 1"
+    else:
+        where = f"i.id LIKE 'NAME {escaped.title()}%'"
+
+    return f"SELECT DISTINCT TOP {SEARCH_LIMIT} {columns} {table} WHERE {where}"
+
+
+def parse_sesame(text):
+    """The resolver's reply: %C.0 object type, %J degrees, %I.0 main identifier."""
+    if "Nothing found" in text:
+        return None
+    found = {}
+    for line in text.splitlines():
+        if line.startswith("%J "):
+            parts = line.split()
+            found["ra"], found["dec"] = float(parts[1]), float(parts[2])
+        elif line.startswith("%C.0"):
+            found["otype"] = line[4:].strip()
+        elif line.startswith("%I.0"):
+            found["id"] = " ".join(line[4:].split())
+    return found if "ra" in found else None
 
 
 class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
@@ -178,6 +206,21 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_json_error(self, code, message):
+        """
+        An error the page can show as it stands.
+
+        send_error answers with an HTML document, which is right for somebody who typed the
+        URL and useless to a fetch: it would end up in the search box verbatim, doctype and
+        all.
+        """
+        body = json.dumps({"error": message}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def fetch_search(self, url, cache_key):
         """Fetch a search, from the cache when it is fresh, and never faster than the limit."""
         cached = _search_cache.get(cache_key)
@@ -200,7 +243,7 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         catalogue = (query.get("catalogue") or [""])[0]
         text = (query.get("q") or [""])[0].strip()
         if not 2 <= len(text) <= 64:
-            self.send_error(400, "search text must be between 2 and 64 characters")
+            self.send_json_error(400, "Search text must be between 2 and 64 characters.")
             return
 
         if catalogue == "satellite":
@@ -208,11 +251,10 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
             url = CELESTRAK_SEARCH_URL.format(
                 field=field, value=urllib.parse.quote(text))
         elif catalogue == "simbad":
-            url = SIMBAD_URL + "?" + urllib.parse.urlencode({
-                "request": "doQuery", "lang": "adql", "format": "json",
-                "query": simbad_query(text)})
+            self.serve_simbad_search(text)
+            return
         else:
-            self.send_error(400, "catalogue must be satellite or simbad")
+            self.send_json_error(400, "Catalogue must be satellite or simbad.")
             return
 
         try:
@@ -223,13 +265,57 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
             if e.code == 404:
                 body = "[]"
             else:
-                self.send_error(502, f"{catalogue} search returned HTTP {e.code}")
+                self.send_json_error(502, f"The {catalogue} catalogue returned HTTP {e.code}.")
                 return
         except OSError:
-            self.send_error(502, f"could not reach the {catalogue} catalogue")
+            self.send_json_error(502, f"Could not reach the {catalogue} catalogue.")
             return
 
         encoded = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def serve_simbad_search(self, text):
+        """
+        What the operator meant, then anything else it could have been.
+
+        Two requests at most: the resolver, which is the one that gets "crab" right, and one
+        table query for alternatives. The alternatives are optional -- if that query fails or
+        times out, the resolved object is still worth returning on its own.
+        """
+        matches = []
+        try:
+            resolved = parse_sesame(self.fetch_search(
+                SESAME_URL + "?" + urllib.parse.quote(text), f"sesame:{text}"))
+            if resolved:
+                resolved["source"] = "resolved"
+                matches.append(resolved)
+        except OSError:
+            self.send_json_error(502, "Could not reach the name resolver.")
+            return
+
+        try:
+            body = self.fetch_search(
+                SIMBAD_URL + "?" + urllib.parse.urlencode({
+                    "request": "doQuery", "lang": "adql", "format": "json",
+                    "query": simbad_query(text)}),
+                f"simbad:{text}")
+            # SIMBAD reports a rejected or slow query as VOTable or HTML, whatever was asked
+            # for, so the reply is checked rather than relayed
+            table = json.loads(body)
+            for row in table.get("data", []):
+                identifier = " ".join(str(row[0]).split())
+                if any(m.get("id") == identifier for m in matches):
+                    continue
+                matches.append({"id": identifier, "ra": row[1], "dec": row[2],
+                                "otype": row[3], "source": "catalogue"})
+        except (OSError, ValueError, KeyError, IndexError):
+            pass  # alternatives are a bonus; what the resolver found still stands
+
+        encoded = json.dumps(matches).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))

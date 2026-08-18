@@ -12,13 +12,18 @@
     import TargetPanel from './components/TargetPanel.vue';
     import OffsetPanel from './components/OffsetPanel.vue';
     import UsersPanel from './components/UsersPanel.vue';
+    import UtilitiesTab from './components/UtilitiesTab.vue';
     import DiagnosticsTab from './components/DiagnosticsTab.vue';
     import MapView from './components/MapView.vue';
     import StarChart from './components/StarChart.vue';
 
     const props = defineProps(['config']);
     const config = props.config;
-    const targets = buildTargets(config);
+    // The configured targets, plus anything found by search this session. Deliberately not
+    // written back to config.toml: a search result is a thing you are trying, and the file is
+    // the list somebody curated.
+    const configuredTargets = buildTargets(config);
+    const targets = computed(() => [...configuredTargets, ...store.extraTargets]);
     const history = new TelemetryHistory((config.diagnostics?.window_minutes ?? 60) * 60);
 
     const client = ref(null);
@@ -42,6 +47,8 @@
         // {name, spec} of the target whose sky path the map and star chart draw: whichever
         // one the target dropdown has selected, or is being tracked.
         focus: null,
+        // targets added by search, for this session only
+        extraTargets: [],
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
         lastError: '',
     });
@@ -460,6 +467,15 @@
         }
     }
 
+    function addTarget(target) {
+        const existing = store.extraTargets.findIndex((t) => t.name === target.name);
+        if (existing >= 0) {
+            store.extraTargets.splice(existing, 1, target);   // refreshed elements win
+        } else {
+            store.extraTargets.push(target);
+        }
+    }
+
     function setEntry(frame, coord1, coord2) {
         entry.frame = frame;
         if (coord1 !== null) entry.coord1 = coord1;
@@ -514,6 +530,7 @@
                     <button role="tab" :aria-selected="tab === 'map'" :class="{ active: tab === 'map' }" @click="tab = 'map'">Map</button>
                     <button role="tab" :aria-selected="tab === 'sky'" :class="{ active: tab === 'sky' }" @click="tab = 'sky'">Sky</button>
                     <button role="tab" :aria-selected="tab === 'diagnostics'" :class="{ active: tab === 'diagnostics' }" @click="tab = 'diagnostics'">Diagnostics</button>
+                    <button role="tab" :aria-selected="tab === 'utilities'" :class="{ active: tab === 'utilities' }" @click="tab = 'utilities'">Utilities</button>
                 </div>
                 <MapView v-show="tab === 'map'" :store="store" :config="config" :targets="targets"
                          @set-azimuth="(az) => setEntry('azel', az.toFixed(2), null)" />
@@ -521,6 +538,7 @@
                            @set-radec="(ra, dec) => setEntry('radec', ra.toFixed(3), dec.toFixed(3))" />
                 <DiagnosticsTab v-show="tab === 'diagnostics'" :visible="tab === 'diagnostics'"
                                 :store="store" :config="config" :history="history" />
+                <UtilitiesTab v-show="tab === 'utilities'" :store="store" @add-target="addTarget" />
             </section>
         </main>
 
