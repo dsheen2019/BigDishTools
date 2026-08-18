@@ -163,19 +163,45 @@
     // us, which keeps poll and network jitter out of it. Positions come back with the
     // calibration offsets already removed (client_manager.py), so measured and expected are
     // in the same frame and the error carries no constant bias.
+    let lastRecorded = 0;
+
     function recordSample(d) {
         const time = Number.isFinite(d.time) ? d.time : Date.now() / 1000;
+
+        // The status poll runs several times a second because the readouts and the map want
+        // it; the plots do not. An hour of plot is six seconds to the pixel, so storing every
+        // reading meant five times the samples, five times the ephemeris to work out where
+        // the dish should have been, and five times the scan on every redraw, for a trace
+        // that cannot show any of it.
+        if (time - lastRecorded < (config.diagnostics?.sample_seconds ?? 1)) {
+            return;
+        }
+        lastRecorded = time;
         let azError = null;
         let elError = null;
+        let azVelError = null;
+        let elVelError = null;
         const expected = expectedAzElAt?.(time);
         if (expected && Number.isFinite(d.az_pos)) {
             azError = angleDiff(d.az_pos, expected.az);
             elError = d.el_pos - expected.el;
+
+            // The rate the target is moving at, from a one second difference of the same
+            // function: zero for anything fixed, sidereal for a track, whatever a satellite
+            // is doing for a satellite. One implementation covers all of them.
+            const ahead = expectedAzElAt(time + 1);
+            if (ahead && Number.isFinite(d.az_vel)) {
+                azVelError = d.az_vel - angleDiff(ahead.az, expected.az);
+                elVelError = d.el_vel - (ahead.el - expected.el);
+            }
         }
         history.push({
             time,
             az: d.az_pos, el: d.el_pos,
+            azCommanded: expected ? expected.az : null,
+            elCommanded: expected ? expected.el : null,
             azError, elError,
+            azVelError, elVelError,
             azVoltage: d.az_voltage, azCurrent: d.az_current,
             elVoltage: d.el_voltage, elCurrent: d.el_current,
         });

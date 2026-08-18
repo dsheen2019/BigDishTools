@@ -157,9 +157,16 @@ rather than drawn as though they sat on it, so a slew reads as off-scale. `dish.
 `dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
 themselves.
 
-Each pixel column shows the range of the samples that fall in it rather than their average,
-so a single-sample current spike still appears after eighteen thousand samples are thinned to
-the width of the plot.
+The plots also carry the commanded position, dotted, behind the measured one; on a healthy
+track the two lie on top of each other, which is why they are told apart by line style rather
+than by shade.
+
+A reading is kept once a second (`diagnostics.sample_seconds`) and the plots redraw every five
+(`redraw_seconds`). An hour across six hundred pixels is six seconds to the pixel, so storing
+or drawing faster shows nothing more. Within that, each pixel column shows the range of the
+samples falling in it rather than their average, so a brief excursion still appears as a
+spike. The chart tabs also stop drawing entirely while hidden, the star chart's live clock
+included.
 
 ## Pointing offsets
 

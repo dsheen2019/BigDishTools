@@ -61,11 +61,20 @@ el_range = [0.0, 90.0]
 [diagnostics]
 window_minutes = 60
 
-# Bounds of the error plots, plus and minus, in degrees. Deliberately tight: the point of
-# those plots is the residual once a track has converged, which a scale wide enough to contain
-# a slew would flatten to nothing. Excursions past this are marked at the edge of the plot
-# rather than drawn as though they sat on the bound.
-error_limit_deg = 0.5
+# Bounds of the pointing error plot, plus and minus, in degrees, and of the rate error plot
+# below it, in degrees per second. Kept far tighter than the dish's travel on purpose: what
+# these plots are for is the residual once a track has converged, which a scale wide enough to
+# contain a slew would flatten to nothing. Excursions past the bounds are marked at the edge
+# of the plot rather than drawn as though they sat on it.
+error_limit_deg = 3.0
+velocity_error_limit_dps = 0.5
+
+# How often to keep a reading for the plots, and how often to redraw them. The status poll
+# runs at status_poll_hz for the readouts and the map; there is no point storing or drawing
+# faster than the plots can show, and an hour across six hundred pixels is six seconds to the
+# pixel. Lower these for finer detail at the cost of more work.
+sample_seconds = 1.0
+redraw_seconds = 5
 
 # Targets the server cannot track itself -- solar system bodies and satellites -- are followed
 # by the console instead, which recomputes az/el and sends it repeatedly. compute_interval_s is

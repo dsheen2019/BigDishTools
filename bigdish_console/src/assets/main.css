@@ -34,9 +34,12 @@
     --panel: #1b2027;
     --panel-edge: #2c333d;
     --panel-inset: #10131a;
-    --text: #cfd3d9;
-    --text-strong: #fff;
-    --muted: #838b96;
+    /* Amber, after the phosphor the old consoles used: easier on the eyes over a long
+     * session in a dark room than a cold grey, and it leaves the teal and orange marks
+     * clearly distinct from ordinary text. */
+    --text: #ffb000;
+    --text-strong: #ffd694;
+    --muted: #bf8a41;
     --accent: #3fae94;      /* status, current-position marks on dark ground */
     --signal: #e0562f;      /* commanded / target marks, stop actions */
     /* The map's chart paper and the marks inked on it are the same in both themes; they
@@ -49,6 +52,10 @@
     --sky-bg: #060a12;      /* the star chart's night sky */
     --chart-ring-tick: rgba(131, 139, 150, 0.45);
     --chart-scale: rgba(131, 139, 150, 0.6);   /* the map's elevation quadrant */
+    --plot-grid: rgba(131, 139, 150, 0.16);    /* diagnostics gridlines, kept well back */
+    --plot-zero: rgba(131, 139, 150, 0.35);    /* and the zero line, only just ahead of them */
+    --trace-az: #1f77b4;                       /* matplotlib's blue and red, which read as */
+    --trace-el: #d62728;                       /* azimuth and elevation on either theme */
     --track-live: #8cc4ef;                     /* the focused target, off the chart paper */
     --track-live-dim: rgba(140, 196, 239, 0.55);
 
@@ -78,6 +85,8 @@
     --sky-bg: #f7f6f2;
     --chart-ring-tick: rgba(97, 104, 111, 0.5);
     --chart-scale: rgba(97, 104, 111, 0.7);
+    --plot-grid: rgba(97, 104, 111, 0.20);
+    --plot-zero: rgba(97, 104, 111, 0.40);
     --track-live: #1f4f7d;
     --track-live-dim: rgba(31, 79, 125, 0.6);
 }

@@ -215,7 +215,15 @@
     }
 
     watch(() => props.visible, (visible) => {
-        if (visible) show();
+        if (visible) {
+            show();
+            // VirtualSky's live clock is a one second interval that redraws every star,
+            // constellation and planet. It runs from startup whether or not anybody can see
+            // it, so it is stopped while this tab is hidden.
+            planetarium?.start();
+        } else {
+            planetarium?.stop();
+        }
     }, { immediate: true });
 
     watch(projectionChoice, (choice) => {

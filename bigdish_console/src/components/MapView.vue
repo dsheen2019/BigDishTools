@@ -10,7 +10,7 @@
     import { skyTrack } from '../lib/skytrack.js';
     import { makeAzElFunction } from '../lib/ephemeris.js';
 
-    const props = defineProps(['store', 'config', 'targets']);
+    const props = defineProps(['store', 'config', 'targets', 'visible']);
     const emit = defineEmits(['set-azimuth']);
 
     const canvasEl = ref(null);
@@ -68,7 +68,10 @@
     let geom = null;
 
     function scheduleDraw() {
-        if (drawQueued) return;
+        // The chart tabs hide each other rather than unmounting, so without this the map
+        // redraws at the telemetry rate -- map image, sky track and all -- while somebody is
+        // looking at a different tab entirely.
+        if (props.visible === false || drawQueued) return;
         drawQueued = true;
         requestAnimationFrame(() => {
             drawQueued = false;
@@ -620,6 +623,10 @@
     );
 
     watch(() => props.store.focus, refreshTrack);
+
+    watch(() => props.visible, (visible) => {
+        if (visible) scheduleDraw();
+    });
 
     watch(() => props.store.theme, () => {
         readPalette();

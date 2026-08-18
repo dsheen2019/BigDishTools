@@ -3,15 +3,14 @@
 // The console already asks the server for position, velocity and motor power several times a
 // second and throws away everything but the latest reading. This keeps a window of them.
 //
-// Samples are stored at full rate and thinned only when drawn: each pixel column of a plot
-// gets the minimum and maximum of the samples falling in it, the way a waveform display
-// works. Averaging would hide exactly what these plots are for -- a current spike, a
-// momentary pointing excursion -- and thinning on the way in would fix the resolution before
-// knowing how wide the plot is.
+// App.vue records one reading a second (diagnostics.sample_seconds), rather than all of them:
+// an hour of plot is about six seconds to the pixel, so the rest cannot be seen. Thinning to
+// the width of the plot then happens when drawing, and takes the minimum and maximum of the
+// samples in each column rather than their average, the way a waveform display does, so an
+// excursion between gridlines still shows up as a spike.
 //
-// Nothing here is reactive. An hour at 5 Hz is eighteen thousand samples, and putting that
-// behind a Vue proxy would cost far more than it helps; the diagnostics tab redraws on its
-// own timer instead.
+// Nothing here is reactive: putting a window of samples behind a Vue proxy would cost far
+// more than it helps, so the diagnostics tab redraws on its own timer instead.
 
 export class TelemetryHistory {
     constructor(windowSeconds = 3600) {
@@ -39,7 +38,10 @@ export class TelemetryHistory {
         while (drop < this.samples.length && this.samples[drop].time < oldest) {
             drop++;
         }
-        if (drop > 0) {
+        // splice moves every remaining element, so dropping one sample at a time turns each
+        // push into a walk of the whole window. Let them accumulate and drop them together;
+        // the extra few seconds of history costs nothing and is clipped when drawn anyway.
+        if (drop >= 64) {
             this.samples.splice(0, drop);
         }
         this.version++;

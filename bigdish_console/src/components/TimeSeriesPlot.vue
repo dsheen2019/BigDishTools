@@ -13,13 +13,16 @@
         history: Object,
         title: String,
         unit: String,
-        // [{field, label, colour}]
+        // [{field, label, colour, dash}], dash being a canvas line pattern for the traces
+        // that need telling apart from one sitting on top of them
         series: Array,
         // {low, high} to fix the axis, or null to scale to the data
         bounds: Object,
         windowSeconds: Number,
         // draw a line at zero, for the error plots
         zeroLine: Boolean,
+        visible: Boolean,
+        redrawSeconds: Number,
     });
 
     const canvasEl = ref(null);
@@ -28,7 +31,8 @@
     const PALETTE = {
         text: '--text',
         muted: '--muted',
-        grid: '--chart-scale',
+        grid: '--plot-grid',
+        zero: '--plot-zero',
         panel: '--panel-inset',
         edge: '--panel-edge',
     };
@@ -46,7 +50,7 @@
 
     let drawQueued = false;
     function scheduleDraw() {
-        if (drawQueued) return;
+        if (props.visible === false || drawQueued) return;
         drawQueued = true;
         requestAnimationFrame(() => {
             drawQueued = false;
@@ -80,7 +84,7 @@
 
         const left = 52;
         const right = 8;
-        const top = 20;
+        const top = 30;   // room for the title
         const bottom = 20;
         const plotWidth = rect.width - left - right;
         const plotHeight = rect.height - top - bottom;
@@ -100,11 +104,11 @@
         ctx.lineWidth = 1;
         ctx.strokeRect(left + 0.5, top + 0.5, plotWidth - 1, plotHeight - 1);
 
-        ctx.font = '600 11px "Barlow Condensed"';
+        ctx.font = '600 20px "Barlow Condensed"';
         ctx.fillStyle = colour.muted;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText(props.unit ? `${props.title}  (${props.unit})` : props.title, left, 4);
+        ctx.fillText(props.unit ? `${props.title}  (${props.unit})` : props.title, left, 3);
 
         if (!bounds) {
             ctx.font = '11px "IBM Plex Mono"';
@@ -138,7 +142,8 @@
         }
 
         if (props.zeroLine && bounds.low < 0 && bounds.high > 0) {
-            ctx.strokeStyle = colour.muted;
+            // barely ahead of the gridlines: it marks where zero is, it is not a reading
+            ctx.strokeStyle = colour.zero;
             ctx.beginPath();
             ctx.moveTo(left, Math.round(yOf(0)) + 0.5);
             ctx.lineTo(left + plotWidth, Math.round(yOf(0)) + 0.5);
@@ -170,8 +175,10 @@
             // Where a bucket runs past the axis, mark the column at the edge instead of
             // clamping silently, so a slew reads as off the scale rather than as a steady
             // error sitting exactly on the bound.
+            ctx.save();
+            ctx.setLineDash(entry.dash ?? []);
             ctx.strokeStyle = colour[entry.field];
-            ctx.lineWidth = 1.25;
+            ctx.lineWidth = entry.dash ? 1.2 : 1.4;
             ctx.beginPath();
             let drawing = false;
             for (const bucket of buckets) {
@@ -197,6 +204,7 @@
                     ctx.fillRect(xOf(bucket.x) - 0.5, top + plotHeight - 4, 1.5, 3);
                 }
             }
+            ctx.restore();
         }
 
         drawLegend(ctx, rect, left);
@@ -210,8 +218,15 @@
         for (const entry of [...props.series].reverse()) {
             const width = ctx.measureText(entry.label).width;
             ctx.fillStyle = colour[entry.field];
-            ctx.fillText(entry.label, x, 4);
-            ctx.fillRect(x - width - 12, 9, 8, 2);
+            ctx.fillText(entry.label, x, 8);
+            if (entry.dash) {
+                // the same dotted swatch as the trace, at full strength: the legend is there
+                // to be read, not to imitate how faint something is
+                ctx.fillRect(x - width - 12, 13, 3, 2);
+                ctx.fillRect(x - width - 7, 13, 3, 2);
+            } else {
+                ctx.fillRect(x - width - 12, 13, 8, 2);
+            }
             x -= width + 20;
         }
     }
@@ -224,14 +239,15 @@
         readPalette();
         resizeObserver = new ResizeObserver(scheduleDraw);
         resizeObserver.observe(wrapEl.value);
-        // redrawing on every sample would be five times a second for no benefit: a plot an
-        // hour wide moves by a pixel every few seconds
+        // An hour across six hundred pixels is six seconds to the pixel, so redrawing every
+        // second was five or six redraws per pixel of movement. Each one rescans the window
+        // for every series, which is the expensive part.
         timer = setInterval(() => {
-            if (props.history.version !== lastVersion) {
+            if (props.visible !== false && props.history.version !== lastVersion) {
                 lastVersion = props.history.version;
                 scheduleDraw();
             }
-        }, 1000);
+        }, (props.redrawSeconds ?? 5) * 1000);
         scheduleDraw();
     });
 
