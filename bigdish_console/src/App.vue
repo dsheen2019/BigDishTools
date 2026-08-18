@@ -4,18 +4,22 @@
     import { buildTargets, fetchTLE } from './lib/targets.js';
     import { isZeroOffset, offsetAzEl, offsetFixedPosition } from './lib/offset.js';
     import { fixedFrameAzEl, makeAzElFunction } from './lib/ephemeris.js';
+    import { TelemetryHistory } from './lib/history.js';
+    import { angleDiff } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
     import StatusPanel from './components/StatusPanel.vue';
     import CommandPanel from './components/CommandPanel.vue';
     import TargetPanel from './components/TargetPanel.vue';
     import OffsetPanel from './components/OffsetPanel.vue';
     import UsersPanel from './components/UsersPanel.vue';
+    import DiagnosticsTab from './components/DiagnosticsTab.vue';
     import MapView from './components/MapView.vue';
     import StarChart from './components/StarChart.vue';
 
     const props = defineProps(['config']);
     const config = props.config;
     const targets = buildTargets(config);
+    const history = new TelemetryHistory((config.diagnostics?.window_minutes ?? 60) * 60);
 
     const client = ref(null);
     const showLogin = ref(true);
@@ -64,6 +68,31 @@
     const tracking = computed(() =>
         Boolean(store.strobe?.active || store.activeCommand?.type === 'track'));
 
+    // Where the dish should be pointing at a given moment, or null when nothing has been
+    // commanded and there is therefore no error to speak of. Set whenever the commanded thing
+    // changes, and evaluated per sample rather than per command, because for a track the
+    // answer moves: the error we want is against where the target was at the instant the
+    // server took the reading, not against where it was when the command was sent.
+    let expectedAzElAt = null;
+
+    function expectFixed(az, el) {
+        expectedAzElAt = () => ({ az, el });
+    }
+
+    function expectSkyFrame(frame, coord1, coord2) {
+        expectedAzElAt = (seconds) =>
+            fixedFrameAzEl(frame, coord1, coord2, config.site, new Date(seconds * 1000));
+    }
+
+    function expectSpec(spec) {
+        try {
+            const azElAt = makeAzElFunction(spec, config.site);
+            expectedAzElAt = (seconds) => azElAt(new Date(seconds * 1000));
+        } catch {
+            expectedAzElAt = null;
+        }
+    }
+
     let posTimer = null;
     let commandTimer = null;
     let pollInFlight = false;
@@ -90,6 +119,7 @@
                         az_voltage: d.az_voltage, az_current: d.az_current,
                         el_voltage: d.el_voltage, el_current: d.el_current,
                     };
+                    recordSample(d);
                 }
             } catch { /* transient; connection loss is handled by onstatechange */ }
             finally { pollInFlight = false; }
@@ -124,7 +154,31 @@
             : [command.ra_pos, command.dec_pos];
         if (Number.isFinite(coord1) && Number.isFinite(coord2)) {
             store.commandedAzEl = fixedFrameAzEl(frame, coord1, coord2, config.site, new Date());
+            expectSkyFrame(frame, coord1, coord2);
         }
+    }
+
+    // Keep the reading for the diagnostics plots. The server timestamps each one, so the
+    // error is computed against that instant rather than against whenever the reply reached
+    // us, which keeps poll and network jitter out of it. Positions come back with the
+    // calibration offsets already removed (client_manager.py), so measured and expected are
+    // in the same frame and the error carries no constant bias.
+    function recordSample(d) {
+        const time = Number.isFinite(d.time) ? d.time : Date.now() / 1000;
+        let azError = null;
+        let elError = null;
+        const expected = expectedAzElAt?.(time);
+        if (expected && Number.isFinite(d.az_pos)) {
+            azError = angleDiff(d.az_pos, expected.az);
+            elError = d.el_pos - expected.el;
+        }
+        history.push({
+            time,
+            az: d.az_pos, el: d.el_pos,
+            azError, elError,
+            azVoltage: d.az_voltage, azCurrent: d.az_current,
+            elVoltage: d.el_voltage, elCurrent: d.el_current,
+        });
     }
 
     function readable() {
@@ -201,6 +255,7 @@
         }
         store.strobe = { name: target.name, active: true, az: null, el: null, up: null, error: '' };
         store.focus = { name: target.name, spec };
+        expectSpec(spec);
         worker = new Worker(new URL('./workers/strobe_worker.js', import.meta.url), { type: 'module' });
         worker.onmessage = async (event) => {
             const message = event.data;
@@ -357,13 +412,22 @@
                 const position = command.action === 'stow'
                     ? config.dish.stow_azel : config.dish.service_azel;
                 store.commandedAzEl = position ? { az: position[0], el: position[1] } : null;
+                if (position) expectFixed(position[0], position[1]);
+                else expectedAzElAt = null;
             } else if (command.frame === 'azel') {
                 store.commandedAzEl = { az: command.coord1, el: command.coord2 };
+                expectFixed(command.coord1, command.coord2);
+            } else if (command.action === 'track') {
+                // follows the sky, so the expectation has to as well
+                expectSkyFrame(command.frame, command.coord1, command.coord2);
+                store.commandedAzEl = fixedFrameAzEl(
+                    command.frame, command.coord1, command.coord2, config.site, new Date());
             } else {
                 // a sky frame: the server does the conversion, so do the same one here rather
                 // than leaving the marks pointing where the previous command went
                 store.commandedAzEl = fixedFrameAzEl(
                     command.frame, command.coord1, command.coord2, config.site, new Date());
+                expectFixed(store.commandedAzEl.az, store.commandedAzEl.el);
             }
         } catch (error) {
             store.lastError = error.message;
@@ -423,11 +487,14 @@
                 <div class="chart-tabs" role="tablist">
                     <button role="tab" :aria-selected="tab === 'map'" :class="{ active: tab === 'map' }" @click="tab = 'map'">Map</button>
                     <button role="tab" :aria-selected="tab === 'sky'" :class="{ active: tab === 'sky' }" @click="tab = 'sky'">Sky</button>
+                    <button role="tab" :aria-selected="tab === 'diagnostics'" :class="{ active: tab === 'diagnostics' }" @click="tab = 'diagnostics'">Diagnostics</button>
                 </div>
                 <MapView v-show="tab === 'map'" :store="store" :config="config" :targets="targets"
                          @set-azimuth="(az) => setEntry('azel', az.toFixed(2), null)" />
                 <StarChart v-show="tab === 'sky'" :visible="tab === 'sky'" :store="store" :config="config"
                            @set-radec="(ra, dec) => setEntry('radec', ra.toFixed(3), dec.toFixed(3))" />
+                <DiagnosticsTab v-show="tab === 'diagnostics'" :visible="tab === 'diagnostics'"
+                                :store="store" :config="config" :history="history" />
             </section>
         </main>
 

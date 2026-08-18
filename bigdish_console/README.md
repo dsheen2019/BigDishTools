@@ -137,6 +137,30 @@ far ahead to look for the next pass) and `max_points` (the sampling ceiling; the
 otherwise sampled every half degree of travel, so a satellite pass gets seconds-apart samples
 and the moon gets minutes-apart ones).
 
+## Diagnostics
+
+The Diagnostics tab plots the last hour of telemetry: position and pointing error on the
+left, motor voltage and current on the right. It is fed from the status poll that already
+runs, so it costs nothing extra to collect, and it starts when the console connects — there
+is no server-side log to backfill from, and this is not the program to build one in.
+
+The error is the difference between the position the server reports and where the dish should
+have been *at the timestamp of that reading*, which the server provides. For a track that
+means recomputing the target's az/el for each sample, since it moves; for a goto it is the
+commanded position; and before anything has been commanded there is no error, so the plot is
+empty rather than showing zero.
+
+`diagnostics.error_limit_deg` in `config.toml` fixes the error axis, deliberately tight —
+a converged track sits a few hundredths of a degree off, which an axis wide enough to hold a
+slew would flatten to nothing. Samples beyond the bound are marked at the edge of the plot
+rather than drawn as though they sat on it, so a slew reads as off-scale. `dish.az_range` and
+`dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
+themselves.
+
+Each pixel column shows the range of the samples that fall in it rather than their average,
+so a single-sample current spike still appears after eighteen thousand samples are thinned to
+the width of the plot.
+
 ## Pointing offsets
 
 The Offset panel adds an angular nudge to every pointing command until it is cleared,

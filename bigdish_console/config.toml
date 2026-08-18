@@ -50,6 +50,23 @@ beamwidth_deg = 2.7            # sets the width of the beam wedge on the map
 stow_azel = [60.0, 30.0]       # where the server parks the dish; see protocol.md
 service_azel = [60.0, 0.0]
 
+# The travel of the rotor, used as the fixed bounds of the diagnostics position plot so that
+# the trace keeps its place on the axis rather than the axis moving under it. Nothing in the
+# server declares these, so set them to what the dish can actually reach.
+az_range = [0.0, 360.0]
+el_range = [0.0, 90.0]
+
+# Position, pointing error, motor voltage and motor current over the last window_minutes.
+# Voltage and current scale themselves to whatever has been seen.
+[diagnostics]
+window_minutes = 60
+
+# Bounds of the error plots, plus and minus, in degrees. Deliberately tight: the point of
+# those plots is the residual once a track has converged, which a scale wide enough to contain
+# a slew would flatten to nothing. Excursions past this are marked at the edge of the plot
+# rather than drawn as though they sat on the bound.
+error_limit_deg = 0.5
+
 # Targets the server cannot track itself -- solar system bodies and satellites -- are followed
 # by the console instead, which recomputes az/el and sends it repeatedly. compute_interval_s is
 # how often to work out an accurate position, command_interval_s how often to send one,
