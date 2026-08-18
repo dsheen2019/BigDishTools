@@ -104,12 +104,17 @@
             <button @click="apply">Apply</button>
             <button v-if="active" class="signal" @click="clear">Clear</button>
         </div>
-        <p v-if="parseError" class="error-text">{{ parseError }}</p>
-        <p v-if="beamPlacement" class="hint data">
-            Beam is {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
-            az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
-        </p>
-        <p class="hint">
+        <!-- one line for whichever of these has something to say: the error while an entry is
+             being typed, the beam placement once one is applied -->
+        <div class="reserve-1">
+            <p v-if="parseError" class="error-text">{{ parseError }}</p>
+            <p v-else-if="beamPlacement" class="hint data">
+                Beam is {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
+                az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
+            </p>
+        </div>
+        <!-- three lines, being the longest of the notes below plus the strobe warning -->
+        <p class="hint reserve-3">
             <template v-if="active && store.offset.frame === 'track'">
                 Δ∥ leads the target along its path, Δ⊥ steps across it, both in true on-sky
                 degrees ({{ formatDeg(separation, 2) }}° total).
@@ -155,5 +160,15 @@
         font-size: 12px;
         color: var(--muted);
         margin: 8px 0 0;
+    }
+
+    /* inside a reserved slot the margins would come out of the space it holds */
+    .reserve-1 {
+        margin-top: 8px;
+        font-size: 12px;
+    }
+
+    .reserve-1 p {
+        margin: 0;
     }
 </style>

@@ -77,6 +77,35 @@ export function buildTargets(config) {
     });
 }
 
+// One line saying what a target is, for lists that show targets of every kind side by side.
+//
+// Written to hold for any of them rather than for the two that happen to be in front of it:
+// an ephemeris loaded from a file has no catalog number and no fixed coordinates, and
+// reaching for coord1 on one of those throws inside a render, which in Vue takes the whole
+// component down and leaves an empty panel behind.
+export function describeTarget(target) {
+    if (target.catnr) {
+        return `catalog ${target.catnr}`;
+    }
+    if (Number.isFinite(target.coord1) && Number.isFinite(target.coord2)) {
+        return target.frame === "azel"
+            ? `az ${target.coord1.toFixed(2)}° el ${target.coord2.toFixed(2)}°`
+            : `ra ${target.coord1.toFixed(3)}° dec ${target.coord2.toFixed(3)}°`;
+    }
+    const times = target.spec?.times;
+    if (times?.length > 1) {
+        const hours = (times[times.length - 1] - times[0]) / 3600;
+        return `${times.length} state vectors, ${hours.toFixed(1)} h`;
+    }
+    if (target.spec?.type === "body") {
+        return target.spec.body;
+    }
+    if (target.spec?.omm?.EPOCH) {
+        return `elements from ${target.spec.omm.EPOCH.slice(0, 16).replace("T", " ")}`;
+    }
+    return target.spec?.type ?? "";
+}
+
 // Fetch orbital elements through the local /omm endpoint (vite dev proxy or serve.py),
 // caching in localStorage so repeated sessions don't hammer CelesTrak.
 //

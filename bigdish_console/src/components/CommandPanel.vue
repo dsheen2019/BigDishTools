@@ -60,7 +60,9 @@
             <label :for="'cmd-c2'">{{ frame.c2 }}</label>
             <input id="cmd-c2" type="text" v-model="entry.coord2" :placeholder="'degrees'" @keyup.enter="goto_" />
         </div>
-        <div class="row" v-if="frame.track">
+        <!-- kept for the frames that cannot be tracked, so switching frame does not move
+             everything below this panel up and down -->
+        <div class="row" :class="{ hidden: !frame.track }">
             <label for="cmd-duration">Track for</label>
             <div class="duration">
                 <input id="cmd-duration" type="number" min="1" v-model="duration" />
@@ -71,8 +73,11 @@
             <button :disabled="!canMove" @click="goto_">Go to</button>
             <button v-if="frame.track" :disabled="!canMove" @click="track">Track</button>
         </div>
-        <p v-if="parseError" class="error-text">{{ parseError }}</p>
-        <p v-if="!canMove" class="hint">Connect with control to move the dish. Clicking the map or sky fills these fields.</p>
+        <!-- two lines held for whichever applies -->
+        <div class="messages reserve-2">
+            <p v-if="parseError" class="error-text">{{ parseError }}</p>
+            <p v-else-if="!canMove" class="hint">Connect with control to move the dish. Clicking the map or sky fills these fields.</p>
+        </div>
     </div>
 </template>
 
@@ -110,5 +115,14 @@
         font-size: 12px;
         color: var(--muted);
         margin: 8px 0 0;
+    }
+
+    .messages {
+        margin-top: 8px;
+        font-size: 12px;
+    }
+
+    .messages p {
+        margin: 0;
     }
 </style>

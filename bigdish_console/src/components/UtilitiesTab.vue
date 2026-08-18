@@ -8,6 +8,7 @@
     import { computed, ref } from 'vue';
     import SearchPicker from './SearchPicker.vue';
     import { readEphemerisFile } from '../lib/ephemeris_file.js';
+    import { describeTarget } from '../lib/targets.js';
     import { parsePointingFile, rowsInThePast } from '../lib/pointing_file.js';
     import { formatWait } from '../lib/schedule.js';
 
@@ -51,19 +52,6 @@
     const requestedInterval = ref(1.0);
     const logPower = ref(true);
     const snapped = computed(() => props.log.snap(Number(requestedInterval.value) || 0));
-    const logSummary = computed(() => {
-        const log = props.log;
-        if (!log.rows.length) {
-            return log.running ? 'Waiting for the first reading.' : 'Not logging.';
-        }
-        const span = log.span;
-        const minutes = span >= 60 ? `${(span / 60).toFixed(1)} min` : `${span.toFixed(0)} s`;
-        const missing = log.missingSeconds > 0
-            ? ` · ${log.gaps.length} gap${log.gaps.length > 1 ? 's' : ''}, `
-              + `${log.missingSeconds.toFixed(0)} s missing`
-            : '';
-        return `${log.rows.length} rows over ${minutes}${missing}`;
-    });
 
     function saveLog() {
         const blob = new Blob([props.log.toCsv()], { type: 'text/csv' });
@@ -130,9 +118,7 @@
                     {{ pointing.past }} of {{ pointing.summary.count }} rows are already in the
                     past and would be sent with a time that has gone.
                 </p>
-                <p v-else class="hint">{{ startsIn }}. The pointing offset is set to zero when
-                    it starts, so the file runs from a known state; it can be nudged by hand
-                    once running.</p>
+                <p v-else class="hint reserve-1">{{ startsIn }}; the pointing offset is zeroed then.</p>
                 <div class="row buttons">
                     <button :disabled="store.state !== 'INITIALIZED' || pointingState === 'queued'
                                 || pointingState === 'running'"
@@ -155,11 +141,9 @@
                  dialog offers first; what a file actually is gets worked out by reading it. -->
             <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm,.asc,.e"
                    @change="readFile" />
-            <p :class="fileFailed ? 'error-text' : 'hint'">
-                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM (.oem, or .asc as NASA'
-                    + ' names them). Elements are propagated;'
-                    + ' a table of state vectors is interpolated between, so it points where'
-                    + ' whoever produced the file says, not where SGP4 guesses.' }}
+            <p :class="[fileFailed ? 'error-text' : 'hint', 'reserve-2']">
+                {{ fileMessage || 'Accepts OMM (.json), TLE (.txt, .tle) and CCSDS OEM'
+                    + ' (.oem, .asc).' }}
             </p>
         </div>
         </div>
@@ -169,7 +153,7 @@
             <h2 class="panel-title">Find a satellite</h2>
             <SearchPicker catalogue="satellite" label="CelesTrak"
                           placeholder="ISS, STARLINK-31, 25544, 1998-067A"
-                          hint="By name, catalog number or international designator. Elements come back as OMM and are refetched when tracking starts."
+                          hint="By name, catalog number or international designator."
                           @add="(target) => emit('add-target', target)" />
         </div>
 
@@ -177,7 +161,7 @@
             <h2 class="panel-title">Find a source</h2>
             <SearchPicker catalogue="simbad" label="SIMBAD"
                           placeholder="crab, M87, Cas A, 3C273, Sgr A*"
-                          hint="Resolved by name or catalogue designation. The first result is what the resolver made of it; anything below is another object whose identifier also matches."
+                          hint="Resolved by name or catalogue designation."
                           @add="(target) => emit('add-target', target)" />
         </div>
 
@@ -206,13 +190,9 @@
                 <button v-else class="signal" @click="log.stop()">Stop</button>
                 <button :disabled="!log.rows.length" @click="saveLog">Save csv</button>
             </div>
-            <p class="hint data">{{ logSummary }}</p>
-            <p class="hint">
-                Rounded to {{ snapped }} s, the nearest multiple of the
-                {{ (1 / (store.pollHz ?? 5)).toFixed(1) }} s status poll this logs from — it
-                records the readings the console already asks for rather than opening a second
-                stream. Same columns as WR66_log_position.py.
-            </p>
+            <!-- the interval that will actually be delivered, since the requested one is
+                 snapped to the status poll this logs from -->
+            <p class="hint data reserve-1">Rounded to {{ snapped }} s.</p>
         </div>
 
         <div class="panel added">
@@ -221,15 +201,13 @@
                 <span v-if="added.length" class="count data">{{ added.length }}</span>
             </h2>
             <p v-if="!added.length" class="hint">
-                Nothing yet. Anything added appears in the Targets dropdown, grouped at the
-                bottom, and is gone when the console is reloaded — to keep one, put it in
-                config.toml.
+                Nothing yet. Anything added joins the Targets dropdown until the console is
+                reloaded.
             </p>
             <ul v-else class="list">
                 <li v-for="target in added" :key="target.name">
                     <span class="data">{{ target.name }}</span>
-                    <span class="where data">{{ target.catnr ? `catalog ${target.catnr}`
-                        : `ra ${target.coord1.toFixed(3)}° dec ${target.coord2.toFixed(3)}°` }}</span>
+                    <span class="where data">{{ describeTarget(target) }}</span>
                 </li>
             </ul>
         </div>

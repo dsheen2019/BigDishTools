@@ -56,27 +56,37 @@
                     <td><span class="figure">{{ formatDeg(store.gal?.l, 3) }}°</span></td>
                     <td><span class="figure">{{ formatDeg(store.gal?.b, 3) }}°</span></td>
                 </tr>
-                <tr v-if="store.power">
+                <!-- these two rows are here whether or not they have anything to say: a row
+                     arriving mid-observation would shove the whole sidebar down a line -->
+                <tr :class="{ hidden: !store.power }">
                     <th>motors</th>
-                    <td><span class="figure-small">{{ formatDeg(store.power.az_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power.az_current, 2) }}</span> A</td>
-                    <td><span class="figure-small">{{ formatDeg(store.power.el_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power.el_current, 2) }}</span> A</td>
+                    <td><span class="figure-small">{{ formatDeg(store.power?.az_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power?.az_current, 2) }}</span> A</td>
+                    <td><span class="figure-small">{{ formatDeg(store.power?.el_voltage, 1) }}</span> V <span class="figure-small">{{ formatDeg(store.power?.el_current, 2) }}</span> A</td>
                 </tr>
-                <tr v-if="offsetActive">
+                <tr :class="{ hidden: !offsetActive }">
                     <th>offset</th>
-                    <td colspan="2" class="offset">{{ describeOffset(store.offset) }}</td>
+                    <td colspan="2" class="offset">{{ offsetActive ? describeOffset(store.offset) : '—' }}</td>
                 </tr>
             </tbody>
         </table>
-        <p class="active-command">{{ activeCommandText }}</p>
+        <p class="active-command reserve-2">{{ activeCommandText }}</p>
         <!-- live state only: a file that has run its course belongs in the utilities tab,
-             not sitting in the sidebar afterwards. A failure stays, since it wants attention. -->
-        <p v-if="['queued', 'running', 'failed'].includes(store.schedule?.state)" class="schedule">
-            <span :class="store.schedule.state === 'running' ? 'running' : ''">{{ store.schedule.text }}</span>
-            <button v-if="['queued', 'running'].includes(store.schedule.state)"
+             not sitting in the sidebar afterwards. A failure stays, since it wants attention.
+             The line keeps its space either way, which is the whole point of queueing a file
+             hours ahead: the sidebar should not rearrange itself when it comes due. -->
+        <p class="schedule reserve-2"
+           :class="{ hidden: !['queued', 'running', 'failed'].includes(store.schedule?.state) }">
+            <span :class="store.schedule?.state === 'running' ? 'running' : ''">{{ store.schedule?.text }}</span>
+            <button v-if="['queued', 'running'].includes(store.schedule?.state)"
                     class="signal small" @click="emit('cancel-file')">Cancel</button>
         </p>
-        <p v-if="store.strobe && !store.strobe.active && store.strobe.error" class="error-text">{{ store.strobe.error }}</p>
-        <p v-if="store.lastError" class="error-text">{{ store.lastError }}</p>
+        <!-- Two lines held for whatever goes wrong. A longer message scrolls inside them
+             rather than growing the panel, since an error is exactly the moment you are
+             reaching for a button somewhere else. -->
+        <div class="messages reserve-2">
+            <p v-if="store.strobe && !store.strobe.active && store.strobe.error" class="error-text">{{ store.strobe.error }}</p>
+            <p v-if="store.lastError" class="error-text">{{ store.lastError }}</p>
+        </div>
     </div>
 </template>
 
@@ -207,5 +217,15 @@
         margin: 10px 0 0;
         font-size: 12px;
         color: var(--muted);
+    }
+
+    .messages {
+        margin-top: 6px;
+        overflow-y: auto;
+        max-height: 2.8em;
+    }
+
+    .messages p {
+        margin: 0;
     }
 </style>

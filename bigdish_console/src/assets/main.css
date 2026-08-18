@@ -199,6 +199,27 @@ button.signal:hover:not(:disabled) {
     font-size: 13px;
 }
 
+/* Reserved space.
+ *
+ * The sidebar is read while the dish is moving, and anything in it that comes and goes --
+ * a queued file, an offset, a warning -- shifts everything below it when it does, and back
+ * again when it stops. So the blocks that vary keep the height of the most they will ever
+ * hold, whether or not they are holding it at the moment, and the layout stays put.
+ *
+ * Sized in lines of their own text, which needs the line height pinned: without it the
+ * browser's "normal" varies with the font and the reserve is off by a few pixels a line.
+ * .hidden keeps a block's space while taking it out of sight, for the ones that would
+ * otherwise be shown empty. */
+.reserve-1, .reserve-2, .reserve-3, .reserve-4 { line-height: 1.4; }
+.reserve-1 { min-height: 1.4em; }
+.reserve-2 { min-height: 2.8em; }
+.reserve-3 { min-height: 4.2em; }
+.reserve-4 { min-height: 5.6em; }
+
+.hidden {
+    visibility: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
     * {
         transition: none !important;

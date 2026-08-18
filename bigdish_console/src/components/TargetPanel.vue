@@ -105,11 +105,13 @@
 
     function goto_() {
         const t = selected.value;
+        if (!t) return;
         emit('command', { action: 'goto', frame: t.frame, coord1: t.coord1, coord2: t.coord2 });
     }
 
     function track() {
         const t = selected.value;
+        if (!t) return;
         emit('command', {
             action: 'track', frame: t.frame, coord1: t.coord1, coord2: t.coord2,
             duration: Number(duration.value),
@@ -126,25 +128,29 @@
                 <option v-for="target in list" :key="target.name" :value="target.name">{{ target.name }}</option>
             </optgroup>
         </select>
-        <p class="preview data">{{ preview }}</p>
+        <!-- two lines: the preview carries coordinates in two frames for a fixed target, and
+             a fetch failure where a satellite's would be -->
+        <p class="preview data reserve-2">{{ preview }}</p>
 
-        <template v-if="selected">
-            <div class="row" v-if="selected.kind === 'track'">
-                <label for="target-duration">Track for</label>
-                <input id="target-duration" type="number" min="1" v-model="duration" />
-                <span class="data seconds">s</span>
-            </div>
-            <div class="buttons">
-                <template v-if="selected.kind === 'strobe'">
-                    <button v-if="!strobeActiveHere" :disabled="!canMove" @click="emit('start-strobe', selected)">Track continuously</button>
-                    <button v-else class="signal" @click="emit('stop-strobe')">Stop tracking</button>
-                </template>
-                <template v-else>
-                    <button :disabled="!canMove" @click="goto_">Go to</button>
-                    <button v-if="selected.kind === 'track'" :disabled="!canMove" @click="track">Track</button>
-                </template>
-            </div>
-        </template>
+        <!-- The duration row and the buttons are always here, hidden rather than removed for
+             the targets they do not apply to. Only some kinds of target can be tracked for a
+             time, and the panel is above the offset and the users list, which have no business
+             moving because somebody looked at a different target. -->
+        <div class="row" :class="{ hidden: selected?.kind !== 'track' }">
+            <label for="target-duration">Track for</label>
+            <input id="target-duration" type="number" min="1" v-model="duration" />
+            <span class="data seconds">s</span>
+        </div>
+        <div class="buttons" :class="{ hidden: !selected }">
+            <template v-if="selected?.kind === 'strobe'">
+                <button v-if="!strobeActiveHere" :disabled="!canMove" @click="emit('start-strobe', selected)">Track continuously</button>
+                <button v-else class="signal" @click="emit('stop-strobe')">Stop tracking</button>
+            </template>
+            <template v-else>
+                <button :disabled="!canMove" @click="goto_">Go to</button>
+                <button v-if="selected?.kind === 'track'" :disabled="!canMove" @click="track">Track</button>
+            </template>
+        </div>
     </div>
 </template>
 
@@ -153,7 +159,6 @@
         font-size: 12px;
         color: var(--muted);
         margin: 8px 0;
-        min-height: 15px;
     }
 
     .row {
