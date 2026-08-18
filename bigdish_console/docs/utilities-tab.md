@@ -56,9 +56,14 @@ Integration is the awkward part, and most of the work:
 - While **queued**, ordinary commands keep working, and the status panel says what is queued
   and when it starts.
 - At the start time the schedule **preempts** whatever is running, including a strobe, and
-  takes ownership of the offset (an offset should apply to file rows too, or explicitly not —
-  decide before building).
+  **resets the pointing offset to zero**. A file that inherited whatever nudge somebody left
+  applied an hour earlier would be a nasty surprise, and a file is a prepared, absolute thing.
+  The offset can be changed by hand once the file is running, so nothing is lost.
 - **Cancelling** mid-run stops the dish where it is, the way Stop tracking does.
+- **Losing the connection** while queued does not discard the file: it stays queued until its
+  own start time, so a network outage that is fixed in time costs nothing. Only at the start
+  time, with still no connection, is it dropped, and said so plainly. Losing the connection
+  mid-run stops it, since the rows after that point cannot be delivered.
 - The diagnostics error trace should follow the file: `expectedAzElAt` needs to return the
   current row's position while the schedule runs.
 
@@ -86,6 +91,11 @@ reason it was skipped is on record.
 One picker component and one temporary-target mechanism serve all of the following. Temporary
 targets live in `store.extraTargets`, are concatenated by `buildTargets`, and are marked in the
 dropdown as belonging to this session — they do not survive a reload, deliberately.
+
+Each remembers where it came from — catalogue number, SIMBAD identifier, or the name of the
+file it was read from — so its elements can be **refetched**: manually, and automatically when
+a track has run long enough that the elements are stale. Provenance is kept in memory only; a
+restart starts clean.
 
 **From CelesTrak**, by name, catalog number or international designator, through the `/omm`
 proxy. Show name, catalog number and epoch; cap the list and say how many matched.
@@ -118,9 +128,11 @@ become temporary `fixed` radec targets.
 3. Log saving — self-contained.
 4. Pointing file queue — largest, and touches the most existing code, so last.
 
-## Still to decide
+## Decided, for the record
 
-- Does a pointing offset apply to rows from a command file, or is the file taken as absolute?
-- What should happen to a queued file if the connection drops before it starts?
-- Should a temporary target be re-fetchable — that is, does the console remember it came from
-  CelesTrak and refresh the elements on a long track?
+- A command file starts from a **zero pointing offset**, set at its start time, so the state at
+  the start is known. It can be changed by hand while the file runs.
+- A queued file **survives a lost connection** and is only discarded if the connection is still
+  down at its start time.
+- Temporary targets are **refetchable but not persistent**: provenance is remembered for the
+  session so stale elements can be refreshed, and a restart starts clean.
