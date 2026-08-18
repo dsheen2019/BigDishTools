@@ -46,7 +46,7 @@ max_hours = 24
 max_points = 500
 
 [dish]
-beamwidth_deg = 2.7            # sets the width of the beam wedge on the map
+beamwidth_deg = 2.9            # sets the width of the beam wedge on the map
 stow_azel = [60.0, 30.0]       # where the server parks the dish; see protocol.md
 service_azel = [60.0, 0.0]
 
@@ -66,7 +66,7 @@ window_minutes = 60
 # these plots are for is the residual once a track has converged, which a scale wide enough to
 # contain a slew would flatten to nothing. Excursions past the bounds are marked at the edge
 # of the plot rather than drawn as though they sat on it.
-error_limit_deg = 3.0
+error_limit_deg = 0.5
 velocity_error_limit_dps = 0.5
 
 # How often to keep a reading for the plots, and how often to redraw them. The status poll
