@@ -62,6 +62,35 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DIST_DIR), **kwargs)
 
+    def end_headers(self):
+        """
+        Tell the browser what it may keep.
+
+        The build gives every bundle a name containing a hash of its contents, so those can be
+        cached forever: a change produces a different name. index.html names them, and must
+        never be cached, or a browser holding an old copy asks for bundles that the last pull
+        deleted -- which looks like a broken install and a flood of 404s, and leaves the app
+        running whatever it had before.
+        """
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/assets/"):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            # everything else revalidates: cheap, since unchanged files answer 304
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+    def handle_one_request(self):
+        """
+        A browser hanging up mid-response is ordinary -- switching tabs, reloading, following
+        a link -- and is not worth a stack trace each time. Report it in one line.
+        """
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+            self.log_message("client closed the connection")
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/tle":
@@ -94,7 +123,6 @@ class ConsoleHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

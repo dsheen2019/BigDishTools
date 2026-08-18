@@ -52,6 +52,12 @@ Development (auto-reload):
 npm run dev
 ```
 
+`serve.py` marks `index.html` as never cacheable and the hashed bundles beside it as cacheable
+forever, which is the arrangement the build's content-hashed filenames exist for. Without it a
+browser can hold an old `index.html` across a `git pull` and then ask for bundles that the
+pull deleted, which looks like a broken install: a page of 404s, a flood of broken pipes in
+the log, and the app quietly running whatever it had before.
+
 Production-style (no Node needed at runtime):
 
 ```sh
