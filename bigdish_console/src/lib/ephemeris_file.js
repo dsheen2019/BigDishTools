@@ -27,7 +27,9 @@ export function readEphemerisFile(name, text) {
         return fromTle(name, trimmed);
     }
     throw new Error(
-        `${name} is not something this recognises: expected OMM (json), a TLE, or a CCSDS OEM.`);
+        `${name} is not something this recognises: expected OMM (json), a TLE, or a CCSDS OEM `
+        + "(.oem or .asc). It is read by what is in it rather than what it is called, so a "
+        + "renamed file is fine and a mislabelled one is not.");
 }
 
 function fromOmmJson(name, text) {

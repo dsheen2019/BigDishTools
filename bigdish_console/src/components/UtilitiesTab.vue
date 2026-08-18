@@ -67,7 +67,7 @@
 
 <template>
     <div class="utilities">
-        <div class="panel column">
+        <div class="panel column find-satellite">
             <h2 class="panel-title">Find a satellite</h2>
             <SearchPicker catalogue="satellite" label="CelesTrak"
                           placeholder="ISS, STARLINK-31, 25544, 1998-067A"
@@ -75,7 +75,7 @@
                           @add="(target) => emit('add-target', target)" />
         </div>
 
-        <div class="panel column">
+        <div class="panel column find-source">
             <h2 class="panel-title">Find a source</h2>
             <SearchPicker catalogue="simbad" label="SIMBAD"
                           placeholder="crab, M87, Cas A, 3C273, Sgr A*"
@@ -83,19 +83,22 @@
                           @add="(target) => emit('add-target', target)" />
         </div>
 
-        <div class="panel column">
+        <div class="panel column load">
             <h2 class="panel-title">Load an ephemeris</h2>
             <label for="ephemeris-file">File</label>
-            <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm"
+            <!-- .asc is what NASA names its OEM files. The list is only what the file
+                 dialog offers first; what a file actually is gets worked out by reading it. -->
+            <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm,.asc,.e"
                    @change="readFile" />
             <p :class="fileFailed ? 'error-text' : 'hint'">
-                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM. Elements are propagated;'
+                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM (.oem, or .asc as NASA'
+                    + ' names them). Elements are propagated;'
                     + ' a table of state vectors is interpolated between, so it points where'
                     + ' whoever produced the file says, not where SGP4 guesses.' }}
             </p>
         </div>
 
-        <div class="panel column">
+        <div class="panel column log">
             <h2 class="panel-title">
                 Log position
                 <span v-if="log.running" class="count data">recording</span>
@@ -148,15 +151,23 @@
 </template>
 
 <style scoped>
+    /* Searches down the left, the two smaller utilities down the right. The searches are what
+     * needs the room -- each holds a list of results -- so they take a full half of the width
+     * rather than a quarter, and the two on the right take only the height they need. */
     .utilities {
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        grid-template-rows: 1fr auto;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr auto;
         gap: 10px;
         overflow-y: auto;
     }
+
+    .find-satellite { grid-column: 1; grid-row: 1; }
+    .find-source { grid-column: 1; grid-row: 2; }
+    .load { grid-column: 2; grid-row: 1; align-self: start; }
+    .log { grid-column: 2; grid-row: 2; align-self: start; }
 
     .column {
         display: flex;
@@ -165,7 +176,8 @@
     }
 
     .added {
-        grid-column: 1 / 5;
+        grid-column: 1 / 3;
+        grid-row: 3;
     }
 
     .check {
@@ -242,8 +254,10 @@
             grid-template-columns: 1fr;
         }
 
-        .added {
+        .find-satellite, .find-source, .load, .log, .added {
             grid-column: 1;
+            grid-row: auto;
+            align-self: auto;
         }
     }
 </style>
