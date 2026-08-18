@@ -67,6 +67,7 @@
 
 <template>
     <div class="utilities">
+        <div class="stack">
         <div class="panel column find-satellite">
             <h2 class="panel-title">Find a satellite</h2>
             <SearchPicker catalogue="satellite" label="CelesTrak"
@@ -83,6 +84,9 @@
                           @add="(target) => emit('add-target', target)" />
         </div>
 
+        </div>
+
+        <div class="stack">
         <div class="panel column load">
             <h2 class="panel-title">Load an ephemeris</h2>
             <label for="ephemeris-file">File</label>
@@ -147,37 +151,46 @@
                 </li>
             </ul>
         </div>
+        </div>
     </div>
 </template>
 
 <style scoped>
-    /* Searches down the left, the two smaller utilities down the right. The searches are what
-     * needs the room -- each holds a list of results -- so they take a full half of the width
-     * rather than a quarter, and the two on the right take only the height they need. */
+    /* Two columns of stacked panels. The searches take the left, each holding a list of
+     * results and so wanting both the width and the height; the loader, the logger and the
+     * list of what has been added share the right, where none of them needs much of either. */
     .utilities {
         flex: 1;
         min-height: 0;
         display: grid;
         grid-template-columns: 1fr 1fr;
-        grid-template-rows: 1fr 1fr auto;
         gap: 10px;
         overflow-y: auto;
     }
 
-    .find-satellite { grid-column: 1; grid-row: 1; }
-    .find-source { grid-column: 1; grid-row: 2; }
-    .load { grid-column: 2; grid-row: 1; align-self: start; }
-    .log { grid-column: 2; grid-row: 2; align-self: start; }
+    .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 0;
+    }
+
+    .find-satellite, .find-source {
+        flex: 1;
+        min-height: 0;
+    }
+
+    /* the list of what has been added takes whatever the two above it leave */
+    .added {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+    }
 
     .column {
         display: flex;
         flex-direction: column;
         min-height: 0;
-    }
-
-    .added {
-        grid-column: 1 / 3;
-        grid-row: 3;
     }
 
     .check {
@@ -254,10 +267,8 @@
             grid-template-columns: 1fr;
         }
 
-        .find-satellite, .find-source, .load, .log, .added {
-            grid-column: 1;
-            grid-row: auto;
-            align-self: auto;
+        .find-satellite, .find-source, .added {
+            flex: none;
         }
     }
 </style>
