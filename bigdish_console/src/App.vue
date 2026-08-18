@@ -794,13 +794,12 @@
         border: none;
         border-bottom: 2px solid transparent;
         border-radius: 0;
-        color: var(--muted);
+        color: var(--text);
         padding: 2px 4px 4px;
-        font-size: 15px;
+        font-size: 17px;
     }
 
     .chart-tabs button.active {
-        color: var(--text);
         border-bottom-color: var(--signal);
     }
 

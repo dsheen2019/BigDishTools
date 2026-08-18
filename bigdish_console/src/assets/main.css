@@ -116,13 +116,16 @@ body {
     padding: 10px 12px 12px;
 }
 
+/* Every control group's name, and the chart tabs beside it (.chart-tabs in App.vue), read
+ * as one family with the site title: same colour, same size, so the panel a control lives
+ * in is never a step down in prominence from the row of tabs above it. */
 .panel-title {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 15px;
+    font-size: 17px;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--muted);
+    color: var(--text);
     margin: 0 0 8px;
     display: flex;
     align-items: baseline;

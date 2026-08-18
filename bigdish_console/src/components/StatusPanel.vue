@@ -136,12 +136,13 @@
         grid-column: 1 / -1;
     }
 
+    /* a label is never smaller than the field it names */
     .key {
         font-family: var(--font-display);
         text-transform: uppercase;
         letter-spacing: 0.1em;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 13px;
     }
 
     .value {
@@ -155,11 +156,11 @@
     }
 
     .big .key {
-        font-size: 14px;
+        font-size: 24px;
     }
 
     .big .value {
-        font-size: 26px;
+        font-size: 24px;
         font-weight: 600;
     }
 
