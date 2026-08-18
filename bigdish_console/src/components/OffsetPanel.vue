@@ -5,7 +5,7 @@
     import { ref, computed, watch } from 'vue';
     import { parseAngle, formatDeg } from '../lib/format.js';
     import {
-        OFFSET_FRAMES, isZeroOffset, skySeparation, currentLatitudeIn, describeOffset,
+        OFFSET_FRAMES, isZeroOffset, skySeparation, describeOffset,
     } from '../lib/offset.js';
 
     const props = defineProps(['store']);
@@ -18,23 +18,6 @@
 
     const labels = computed(() => OFFSET_FRAMES[frame.value]);
     const active = computed(() => !isZeroOffset(props.store.offset));
-    const tracking = computed(() =>
-        props.store.strobe?.active || props.store.activeCommand?.type === 'track');
-
-    // What the beam actually moves, which for the longitude-like axis depends on where the
-    // dish is pointing now.
-    const separation = computed(() => {
-        const offset = props.store.offset;
-        const latitude = currentLatitudeIn(offset.frame, props.store);
-        if (isZeroOffset(offset) || latitude === undefined || latitude === null) return null;
-        return skySeparation(offset, latitude);
-    });
-
-    // An az/el or track offset on a sky target has to be strobed: say so up front.
-    const strobeWarning = computed(() =>
-        (frame.value === 'azel' || frame.value === 'track')
-        && props.store.activeCommand?.type === 'track');
-
     // While the console is driving the track it knows where the source itself is, so it can
     // report exactly where the beam was put rather than a first-order estimate.
     const beamPlacement = computed(() => {
@@ -102,29 +85,16 @@
             <button @click="apply">Apply</button>
             <button class="signal" :disabled="!active" @click="clear">Clear</button>
         </div>
-        <!-- One line for whichever of these has something to say: the error while an entry is
-             being typed, the beam placement once one is applied. The panel was near enough a
-             fixed height before and stays that way -- the notes are written short enough to
-             fit a line rather than the line being stretched to fit them. -->
-        <div class="reserve-1">
+        <!-- One line, and only when there is something in it: an entry that did not parse,
+             or where the beam actually ended up once an offset is applied. Nothing is held
+             open under the buttons for a message that is usually not there. -->
+        <div v-if="parseError || beamPlacement" class="message">
             <p v-if="parseError" class="error-text one-line" :title="parseError">{{ parseError }}</p>
-            <p v-else-if="beamPlacement" class="hint data one-line">
+            <p v-else class="hint data one-line">
                 {{ formatDeg(beamPlacement.onSky, 2) }}° off source:
                 az {{ signed(beamPlacement.dAz) }}, el {{ signed(beamPlacement.dEl) }}
             </p>
         </div>
-        <p class="hint reserve-1 one-line">
-            <template v-if="active && store.offset.frame === 'track'">
-                Δ∥ along the track, Δ⊥ across it: {{ formatDeg(separation, 2) }}° on sky.
-            </template>
-            <template v-else-if="active && separation !== null">
-                Beam moves {{ formatDeg(separation, 2) }}° on sky.
-            </template>
-            <template v-else-if="active">Applied to commanded coordinates.</template>
-            <template v-else-if="tracking">Applying re-points what is tracking now.</template>
-            <template v-else>Added to every pointing command until cleared.</template>
-            <template v-if="strobeWarning"> Console will take over tracking.</template>
-        </p>
     </div>
 </template>
 
@@ -166,13 +136,13 @@
         margin: 8px 0 0;
     }
 
-    /* inside a reserved slot the margins would come out of the space it holds */
-    .reserve-1 {
+    .message {
         margin-top: 8px;
         font-size: 12px;
+        line-height: 1.4;
     }
 
-    .reserve-1 p {
+    .message p {
         margin: 0;
     }
 </style>
