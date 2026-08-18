@@ -116,6 +116,29 @@ become temporary `fixed` radec targets.
   2.7° beam.
 - The strobe worker takes the spec by `postMessage`, so an OEM spec must be plain arrays.
 
+## Later: Starlink's Modified ITC files
+
+SpaceX publish 72 hours of prediction per satellite, refreshed every 8 hours, mirrored at
+`api.starlink.com/public-files/ephemerides/` with a `MANIFEST.txt` listing them. Looked at one:
+
+```
+created:2026-08-17 20:23:53 UTC
+ephemeris_start:2026-08-17 20:06:42 UTC ephemeris_stop:2026-08-20 20:06:42 UTC step_size:60
+ephemeris_source:blend
+UVW
+2026229200642.000 -4646.5842652999 1931.9096876747 -4667.2342554837 -2.9242672757 -7.0345283076 -0.0000551268
+<three lines of covariance>
+```
+
+So: four header lines, then records of four lines each — a state vector followed by twenty-one
+covariance terms, which are of no use here and can be skipped. The epoch is YYYYDDDHHMMSS.sss
+(day of year, not month and day), positions are km and velocities km/s, and the frame is MEME,
+which the filename also announces.
+
+Which means it is the same data as an OEM in a different wrapper: once state-vector targets
+exist, this is another parser feeding the same sampler, not another kind of target. Worth
+doing after the file upload lands.
+
 ## Order of work
 
 0. OMM migration — prerequisite, mechanical.

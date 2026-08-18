@@ -122,6 +122,15 @@ designation from SIMBAD; either can be added to the Targets dropdown, where it b
 anything else — sky path, offsets, tracking. Added targets belong to the session and are gone
 on reload; to keep one, put it in `config.toml`.
 
+An ephemeris can also be loaded from a file: OMM (json), a TLE, or a CCSDS OEM. The first two
+are elements and get propagated like any satellite. An OEM is a table of state vectors somebody
+else has already computed — often a better prediction than SGP4 can give, since the operator
+knows their own manoeuvres — so it becomes a target of its own kind, interpolated between the
+states with a cubic that uses the velocities the file carries. A straight line between them
+would not do: at the sixty second spacing these files use, a satellite in low orbit departs
+from the chord by about four kilometres, which at a few hundred kilometres range is nearly half
+a degree. Files are read in the browser; nothing is uploaded.
+
 Sources are resolved by the same CDS name resolver `astropy`'s `SkyCoord.from_name` uses,
 which is what makes "crab", "m87" and "sgr a*" work; the results below the first are other
 objects whose identifiers also match. Searching happens when asked rather than as you type,

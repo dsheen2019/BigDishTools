@@ -5,13 +5,37 @@
     // from SIMBAD. Anything added here belongs to this session only: it is in the dropdown
     // until the console is reloaded, and is not written back to config.toml.
 
-    import { computed } from 'vue';
+    import { computed, ref } from 'vue';
     import SearchPicker from './SearchPicker.vue';
+    import { readEphemerisFile } from '../lib/ephemeris_file.js';
 
     const props = defineProps(['store']);
     const emit = defineEmits(['add-target']);
 
     const added = computed(() => props.store.extraTargets ?? []);
+    const fileMessage = ref('');
+    const fileFailed = ref(false);
+
+    // Read locally: nothing is uploaded, here or anywhere else in this app.
+    async function readFile(event) {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        fileMessage.value = '';
+        fileFailed.value = false;
+        try {
+            const target = readEphemerisFile(file.name, await file.text());
+            emit('add-target', target);
+            const states = target.spec.times?.length;
+            fileMessage.value = states
+                ? `Added ${target.name}: ${states} state vectors covering `
+                  + `${((target.spec.times.at(-1) - target.spec.times[0]) / 3600).toFixed(1)} hours.`
+                : `Added ${target.name}.`;
+        } catch (error) {
+            fileFailed.value = true;
+            fileMessage.value = error.message;
+        }
+        event.target.value = '';   // so the same file can be picked again after a fix
+    }
 </script>
 
 <template>
@@ -30,6 +54,18 @@
                           placeholder="crab, M87, Cas A, 3C273, Sgr A*"
                           hint="Resolved by name or catalogue designation. The first result is what the resolver made of it; anything below is another object whose identifier also matches."
                           @add="(target) => emit('add-target', target)" />
+        </div>
+
+        <div class="panel column">
+            <h2 class="panel-title">Load an ephemeris</h2>
+            <label for="ephemeris-file">File</label>
+            <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm"
+                   @change="readFile" />
+            <p :class="fileFailed ? 'error-text' : 'hint'">
+                {{ fileMessage || 'OMM (json), a TLE, or a CCSDS OEM. Elements are propagated;'
+                    + ' a table of state vectors is interpolated between, so it points where'
+                    + ' whoever produced the file says, not where SGP4 guesses.' }}
+            </p>
         </div>
 
         <div class="panel added">
@@ -58,7 +94,7 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr 1fr;
         grid-template-rows: 1fr auto;
         gap: 10px;
         overflow-y: auto;
@@ -71,7 +107,13 @@
     }
 
     .added {
-        grid-column: 1 / 3;
+        grid-column: 1 / 4;
+    }
+
+    input[type="file"] {
+        font-family: var(--font-body);
+        font-size: 12px;
+        padding: 4px;
     }
 
     .count {
