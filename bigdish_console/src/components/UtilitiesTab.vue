@@ -182,8 +182,8 @@
             <input id="ephemeris-file" type="file" accept=".json,.txt,.tle,.oem,.omm,.asc,.e"
                    @change="readFile" />
             <p :class="[fileFailed ? 'error-text' : 'hint', 'reserve-2']">
-                {{ fileMessage || 'Accepts OMM (.json), TLE (.txt, .tle) and CCSDS OEM'
-                    + ' (.oem, .asc).' }}
+                {{ fileMessage || 'Accepts OMM (.json), TLE (.txt, .tle), CCSDS OEM'
+                    + ' (.oem, .asc) and Starlink ephemerides (.txt).' }}
             </p>
         </div>
         </div>

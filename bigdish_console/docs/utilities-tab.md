@@ -116,7 +116,7 @@ become temporary `fixed` radec targets.
   2.7° beam.
 - The strobe worker takes the spec by `postMessage`, so an OEM spec must be plain arrays.
 
-## Later: Starlink's Modified ITC files
+## Starlink's Modified ITC files (built)
 
 SpaceX publish 72 hours of prediction per satellite, refreshed every 8 hours, mirrored at
 `api.starlink.com/public-files/ephemerides/` with a `MANIFEST.txt` listing them. Looked at one:
@@ -136,8 +136,17 @@ covariance terms, which are of no use here and can be skipped. The epoch is YYYY
 which the filename also announces.
 
 Which means it is the same data as an OEM in a different wrapper: once state-vector targets
-exist, this is another parser feeding the same sampler, not another kind of target. Worth
-doing after the file upload lands.
+exist, this is another parser feeding the same sampler, not another kind of target. Built that
+way, as `fromStarlink` in `src/lib/ephemeris_file.js`.
+
+The frame was checked rather than taken from the filename, since MEME *of date* would be a
+quarter of a degree from J2000 by now, which is a tenth of the beam. Fitting the node of a
+72-hour file for STARLINK-35887 back to the epoch of the same satellite's CelesTrak elements
+gives RAAN 170.029° against the elements' 170.0288° and inclination 43.001° against 42.9992°,
+but only after rotating the file's states from J2000 to the equator of date; read as of-date
+they miss the node by half a degree. So these files are J2000, and go through unrotated like
+an OEM. Pointing agrees with SGP4 on the same satellite to 0.14° mean once a 3.2 s along-track
+shift is allowed for -- which is the day-old TLE lagging, and the reason to use the file.
 
 ## Order of work
 
