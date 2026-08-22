@@ -34,7 +34,7 @@ from scipy.interpolate import make_interp_spline
 
 from astropy.coordinates import (
     GCRS,
-    AltAz,
+    ITRS,
     EarthLocation,
     CartesianRepresentation,
 )
@@ -59,6 +59,16 @@ OBSERVER = EarthLocation(
     lon=BIGDISH["lon"] * u.deg,
     height=BIGDISH["height"] * u.m,
 )
+
+# The site in earth-fixed coordinates, and the east / north / up it stands in,
+# both the same at every epoch and so worked out once.
+OBSERVER_ITRS_KM = np.array([c.to_value(u.km) for c in OBSERVER.geocentric])
+
+_LAT = np.radians(BIGDISH["lat"])
+_LON = np.radians(BIGDISH["lon"])
+EAST  = np.array([-np.sin(_LON), np.cos(_LON), 0.0])
+NORTH = np.array([-np.sin(_LAT) * np.cos(_LON), -np.sin(_LAT) * np.sin(_LON), np.cos(_LAT)])
+UP    = np.array([np.cos(_LAT) * np.cos(_LON), np.cos(_LAT) * np.sin(_LON), np.sin(_LAT)])
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +181,23 @@ def gcrs_to_altaz(x_km: float, y_km: float, z_km: float,
     Convert a geocentric EME2000 (≈ GCRS) Cartesian position to topocentric
     azimuth and elevation as seen from the bigdish site.
 
+    The route is GCRS → ITRS, which is the earth-rotation chain and nothing
+    else, then the difference from the site and a projection onto the local
+    east / north / up. Deliberately *not* astropy's AltAz frame: that goes by
+    way of CIRS and applies the aberration and parallax handling meant for a
+    source at infinity. For a target in earth orbit that is simply wrong -- on a
+    Starlink pass it puts the dish up to 0.027° off at 800 km range, worsening
+    as the range shrinks -- and at lunar distance it still leaves the ~20
+    arcseconds of annual aberration, which does not belong on a position given
+    in a geocentric frame the observer shares.
+
+    What is legitimately left out is smaller: light travel time moves the moon
+    by 0.0002° and a low satellite by 0.001°, and aberration from the observer's
+    own rotation is 0.3 arcseconds.
+
+    This geometric route agrees with astronomy-engine, an independent
+    implementation used by the console, to 0.0002°.
+
     Parameters
     ----------
     x_km, y_km, z_km : float   — position in km in EME2000/GCRS
@@ -182,9 +209,13 @@ def gcrs_to_altaz(x_km: float, y_km: float, z_km: float,
     """
     t = Time(t_unix, format="unix", scale="utc")
     pos = CartesianRepresentation(x_km * u.km, y_km * u.km, z_km * u.km)
-    gcrs = GCRS(pos, obstime=t)
-    altaz = gcrs.transform_to(AltAz(obstime=t, location=OBSERVER))
-    return float(altaz.az.deg), float(altaz.alt.deg)
+    itrs = GCRS(pos, obstime=t).transform_to(ITRS(obstime=t))
+    topo = itrs.cartesian.xyz.to_value(u.km) - OBSERVER_ITRS_KM
+
+    east, north, up = topo @ EAST, topo @ NORTH, topo @ UP
+    az = float(np.degrees(np.arctan2(east, north)) % 360.0)
+    el = float(np.degrees(np.arctan2(up, np.hypot(east, north))))
+    return az, el
 
 
 # ---------------------------------------------------------------------------
