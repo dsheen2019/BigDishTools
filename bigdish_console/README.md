@@ -103,6 +103,62 @@ Target types:
   cannot carry catalog numbers past five digits; a TLE is still accepted if that is what you
   have.
 
+## Connecting and control
+
+Connecting and taking control are two steps, and the second one lives in the header rather
+than in the startup dialog. The dialog gets you as far as an authenticated, view-only
+session; the session menu at the right of the header — `user@host:port` — is where control
+is asked for, given back, and logged out of.
+
+The order is forced by the protocol and is the better order anyway: the server will not tell
+a connection who else is on until it has authenticated, so there is no way to know whether
+taking control means taking it off somebody until you are already connected. Asking first
+and deciding second means the kick is made with the other operator's name and how long since
+they last moved the dish in front of you, rather than as a checkbox ticked before there was
+anything to know. **Connect and take control** in the dialog runs both steps for the common
+case where nobody else is on, and falls back to the same dialog if somebody is.
+
+Everything the console does for its own sake — the map and star chart, the diagnostics
+history, the position log, a queued pointing file's countdown — needs no more than an
+authenticated connection, so stepping back to view only costs none of it. Logging out
+deliberately does not put the dialog back up: an hour of diagnostics is still worth reading,
+and the header offers the way back in.
+
+Two things are worth knowing about how this works against the current server.
+
+**Releasing control drops the connection for about a second.** The protocol has no message
+for giving control back — a connection leaves the controlling state only by being kicked or
+by going away — so releasing means closing the socket and immediately reconnecting as a
+viewer, which the server reads as an ordinary disconnect. The console does this for you and
+says what it is doing, but the second off the air is real: it shows up as a gap in the
+position log, which counts and reports such gaps, and as a notch in the diagnostics traces.
+It also means the password is held in memory for the session, to authenticate again. A
+`release` message would make it a single round trip and remove both costs; see `todo.txt` in
+the repository root.
+
+**A kick is worked out rather than announced.** The server sends nothing when it takes
+control away, and the user list it does offer is keyed by account rather than by connection,
+so with one shared login per station — the ordinary arrangement — two windows are
+indistinguishable in it by name. The console picks its own entry out of the list by
+timestamp instead: the server stamps the sender's last-active time before building the reply,
+so the newest entry in an answer is always the connection that asked for it. Reading the
+state off that entry catches a kick by anyone, on any account, within one poll, and it is
+what makes losing control during a *track* visible at all — a track is run by the server, so
+a console that has quietly lost control sends nothing that could come back refused, and would
+otherwise go on claiming control for as long as the track lasted.
+
+This is an inference, not a label: two connections that sent a command in the same microsecond
+would tie, and the loser would misread one poll before the next corrected it. `todo.txt`
+describes the one-field server change that would make it a fact instead. Independently of it,
+the answer to any refused command or control request is taken as the authority on which state
+this console is really in, so a drifted header corrects itself the moment anything is asked.
+
+While control is held, releasing or logging out while the dish is following something asks
+first, and offers to stop the dish on the way out. Giving up control does not stop it
+otherwise: the server runs the command it already has until that command ends, whether or not
+anyone is left in control — which is the same thing that happens today when a browser tab is
+closed, and is what makes handing a running observation to the next operator possible.
+
 ## Themes
 
 The button at the right of the header switches between the dark console and a light one; the

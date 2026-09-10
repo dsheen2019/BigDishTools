@@ -1,5 +1,5 @@
 <script setup>
-    import { reactive, ref, computed, watchEffect, onUnmounted } from 'vue';
+    import { reactive, ref, shallowRef, computed, watchEffect, onUnmounted } from 'vue';
     import { DishClient } from '@client/bigdish_client.js';
     import { buildTargets, fetchElements } from './lib/targets.js';
     import { isZeroOffset, offsetAzEl, offsetFixedPosition } from './lib/offset.js';
@@ -9,6 +9,8 @@
     import { Schedule } from './lib/schedule.js';
     import { angleDiff } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
+    import SessionMenu from './components/SessionMenu.vue';
+    import ControlConflictDialog from './components/ControlConflictDialog.vue';
     import StatusPanel from './components/StatusPanel.vue';
     import CommandPanel from './components/CommandPanel.vue';
     import TargetPanel from './components/TargetPanel.vue';
@@ -30,11 +32,32 @@
     // Reactive so the panel's counters move; the rows themselves are plain objects inside it.
     const positionLog = reactive(new PositionLog(1 / config.status_poll_hz));
 
-    const client = ref(null);
-    const showLogin = ref(true);
-    const loginError = ref('');
-    const connecting = ref(false);
+    // shallowRef, not ref: ref() wraps whatever it is given in a reactive proxy, and the
+    // proxy is not the object that was put in it. The connection is identified by identity --
+    // "is this state change from the client this session is using, or from one being replaced
+    // while it winds down?" -- and against a deep ref that test is false for the live client
+    // as much as for a stale one, so every state change gets thrown away. There is nothing in
+    // the client worth tracking reactively anyway; what changes is which client it is.
+    const client = shallowRef(null);
     const tab = ref('map');
+
+    // The console's own idea of the session, beside the protocol state in store.state: where
+    // we are connected and as whom, and whatever the header has to say about a transition in
+    // progress. Kept out of store because it answers "who are you", not "what is the dish
+    // doing", and store is handed to every panel.
+    const session = reactive({
+        host: '', port: 0, user: '',
+        showLogin: true,     // the login dialog: at startup, on a dropped link, on request
+        busy: '',            // '' | 'connecting' | 'taking' | 'releasing'
+        error: '',           // shown in the login dialog
+        notice: '',          // shown in the session menu: refusals, kicks
+        conflict: null,      // {holders, reason} while the take-control dialog is up
+    });
+
+    // Held for the session but never stored: giving control back means dropping the
+    // connection and coming straight back as a viewer (see releaseControl), which needs the
+    // password a second time. Phase 1 in todo.txt removes the need for this.
+    let heldPassword = '';
 
     // Single source of truth the panels and charts render from.
     const store = reactive({
@@ -53,6 +76,9 @@
         focus: null,
         // targets added by search, for this session only
         extraTargets: [],
+        // everyone the server says is connected, polled once the session is authenticated:
+        // the sidebar panel, the session menu and the take-control dialog all read this one
+        users: [],
         // what a queued or running pointing file is doing, for the panels to show
         schedule: { state: 'idle', text: '' },
         theme: 'dark',   // 'dark' | 'light', mirrored here for the charts to watch
@@ -110,13 +136,16 @@
 
     let posTimer = null;
     let commandTimer = null;
+    let userTimer = null;
     let pollInFlight = false;
 
     function stopPolling() {
         clearInterval(posTimer);
         clearInterval(commandTimer);
+        clearInterval(userTimer);
         posTimer = null;
         commandTimer = null;
+        userTimer = null;
     }
 
     function startPolling() {
@@ -152,6 +181,12 @@
                 }
             } catch { /* transient */ }
         }, 1000);
+
+        // Straight away as well as on the interval: the header and the sidebar should not sit
+        // blank for two seconds after connecting, and the answer is what the operator needs in
+        // order to decide about control.
+        userTimer = setInterval(pollUsers, 2000);
+        pollUsers();
     }
 
     // Where the dish has been told to point, when that is a moving point on the sky. A
@@ -227,50 +262,324 @@
         return client.value && (store.state === 'AUTHENTICATED' || store.state === 'INITIALIZED');
     }
 
-    async function connect({ host, port, user, password, control, kick }) {
-        loginError.value = '';
-        connecting.value = true;
-        if (client.value) {
-            client.value.close();
-            client.value = null;
-        }
+    // --- the session: connecting, taking control, giving it back ---
+    //
+    // Three steps that used to be one. Connecting and authenticating gets a view-only session,
+    // and nothing can be known before it does: the server will not tell a connection that has
+    // not authenticated who else is on (protocol.md, get_active_users). Control is asked for
+    // after that, once there is something to base the decision on, and it can be handed back
+    // without ending the session -- everything the console does for its own sake, the charts,
+    // the diagnostics history, the position log, needs no more than an authenticated link.
+
+    // One message, in both of the places it might be looked for: the session menu, where the
+    // operator has just clicked, and the sidebar's message line, which is on screen anyway.
+    function notify(message) {
+        session.notice = message;
+        store.lastError = message;
+    }
+
+    function closeClient() {
+        const c = client.value;
+        client.value = null;   // before close(), so the state callback knows it is stale
+        stopPolling();
+        if (c) c.close();
+        store.state = 'DISCONNECTED';
+        store.users = [];
+        // nothing to decide about a connection that has gone, and a dialog left up here would
+        // outlive the session that raised it and cover the console from then on
+        session.conflict = null;
+        schedule.setConnected(false);
+    }
+
+    async function connectAndAuth({ host, port, user, password, control = false }) {
+        session.error = '';
+        session.notice = '';
+        // releaseControl has already named what it is doing, and from the operator's side that
+        // is one action rather than a disconnect followed by a connect
+        session.busy = session.busy || 'connecting';
+        closeClient();
+
         const c = new DishClient(host, port);
         c.onstatechange = (state) => {
+            // a client we have already replaced, winding down: its close is not this session
+            // ending, and must not put the login dialog up over a live console
+            if (client.value !== c) return;
             store.state = state;
             // a queued file rides out a brief outage; a running one cannot
             schedule.setConnected(state === 'AUTHENTICATED' || state === 'INITIALIZED');
-            if (state === 'DISCONNECTED' && client.value === c) {
+            if (state === 'DISCONNECTED') {
                 stopStrobe('Connection to the dish server was lost.');
                 stopPolling();
-                loginError.value = 'Connection to the dish server was lost.';
-                showLogin.value = true;
+                client.value = null;
+                store.users = [];
+                session.error = 'Connection to the dish server was lost.';
+                session.showLogin = true;
             }
         };
+
         try {
             await c.connect();
             const auth = await c.auth(user, password);
             if (!auth.success) {
-                loginError.value = auth.reason || 'Authentication failed.';
+                session.error = auth.reason || 'Authentication failed.';
                 c.close();
-                return;
-            }
-            if (control) {
-                const init = await c.init(kick);
-                if (!init.success) {
-                    loginError.value = `${init.reason || 'Could not get dish control.'} You can retry with "kick other users", or connect for viewing only.`;
-                    c.close();
-                    return;
-                }
+                return false;
             }
             client.value = c;
-            showLogin.value = false;
+            // the callback above ignored everything up to here, this client not yet being
+            // the session's, so the state it reached is copied across by hand
+            store.state = c.state;
+            schedule.setConnected(true);
+            heldPassword = password;
+            Object.assign(session, { host, port: Number(port), user, showLogin: false });
             startPolling();
         } catch (error) {
-            loginError.value = error.message;
+            session.error = error.message;
+            session.showLogin = true;
             c.close();
+            return false;
         } finally {
-            connecting.value = false;
+            session.busy = '';
         }
+
+        // Outside the try, and deliberately after the connection has been kept: a refused init
+        // is not a failed connection. It used to close the socket, which threw away the
+        // view-only session that is now the thing to fall back to.
+        if (control) await takeControl();
+        return true;
+    }
+
+    // Who holds the dish at this moment, asked rather than remembered: the polled list can be
+    // two seconds old, which is long enough for control to have changed hands, and this
+    // answer decides whether taking it means taking it off somebody.
+    async function holdersNow() {
+        try {
+            const response = await client.value.get_active_users();
+            if (response.success) {
+                store.users = response.users.filter((user) => user.account);
+            }
+        } catch { /* fall back on the polled copy */ }
+        return store.users.filter((user) => user.state === 'INITIALIZED');
+    }
+
+    async function takeControl({ kick = false } = {}) {
+        if (!readable()) return false;
+        session.busy = 'taking';
+        session.notice = '';
+        try {
+            if (!kick) {
+                const holders = await holdersNow();
+                if (holders.length) {
+                    session.conflict = { holders };
+                    return false;
+                }
+            }
+            const init = await client.value.init(kick);
+            // Whatever the answer, the question the dialog was asking has now been answered
+            // and it must come down. Its backdrop covers the whole console, so one left
+            // standing swallows every click on the page and nothing works again.
+            session.conflict = null;
+            if (init.success) {
+                return true;
+            }
+            if (resyncFromRefusal(init.reason)) {
+                return true;
+            }
+            // Refused for a reason of the server's own. Somebody taking control in the moment
+            // between the check and the request is the dialog's business again; anything else
+            // -- a read-only account -- is just a message.
+            const holders = kick ? [] : await holdersNow();
+            if (holders.length) {
+                session.conflict = { holders, reason: init.reason };
+            } else {
+                notify(init.reason || 'Could not get dish control.');
+            }
+            return false;
+        } catch (error) {
+            session.conflict = null;
+            notify(error.message);
+            return false;
+        } finally {
+            session.busy = '';
+        }
+    }
+
+    // The two refusals that say something about our own state rather than about the request.
+    //
+    // A console whose idea of control has drifted from the server's is worse than one that
+    // plainly has none: every command fails and nothing on screen explains why. The drift is
+    // real and not rare -- a kick by somebody logged in under the same account is invisible to
+    // detectKick, and one shared account per station is the normal way these are used -- so
+    // the answer to an init is taken as the authority it is, and both sides are put back in
+    // step from it.
+    function resyncFromRefusal(reason) {
+        // "init message is only available to clients in AUTHENTICATED state": the server has
+        // had us INITIALIZED all along, whatever we thought.
+        if (/AUTHENTICATED state/.test(reason ?? '')) {
+            store.state = 'INITIALIZED';
+            if (client.value) {
+                client.value.state = 'INITIALIZED';
+            }
+            return true;
+        }
+        // "Other initialized clients are connected": whoever has it, we do not.
+        if (/Other initialized clients/.test(reason ?? '') && store.state === 'INITIALIZED') {
+            loseControl('Another user holds dish control.');
+        }
+        return false;
+    }
+
+    // Everything this console is driving the dish with, stopped. Whatever is about to happen
+    // to control, none of it can go on running against a connection that will not have it: a
+    // strobe would keep firing positions at a view-only socket and fail on every tick.
+    function standDown(reason = '') {
+        stopStrobe(reason);
+        if (['queued', 'running'].includes(schedule.state)) {
+            schedule.cancel();
+        }
+        lastRequest = null;
+    }
+
+    // Give control back and carry on watching.
+    //
+    // The protocol has no message for this: a connection leaves INITIALIZED only by being
+    // kicked or by going away (client_manager.py, remove_client). So it goes away and comes
+    // straight back, authenticated but not initialized, which the server reads as an ordinary
+    // disconnect -- and control is free. todo.txt S1 is the message that would make it a
+    // single round trip; until then it costs a second's gap in the position log and the
+    // diagnostics traces, and the password having to be kept for the session.
+    // Nothing here may fail without saying so. Giving up control is a deliberate act with no
+    // visible result of its own when it works -- the lamp changes and that is all -- so one
+    // that quietly does nothing is indistinguishable from one that worked, and the operator
+    // walks away believing they have handed the dish over when they have not.
+    async function releaseControl({ stopFirst = false } = {}) {
+        if (store.state !== 'INITIALIZED') {
+            notify('Nothing to release: this console does not hold dish control.');
+            return;
+        }
+        // Marked busy before the first step rather than after the last, so the header says
+        // what is happening for the whole of it. Stopping the dish first means waiting on a
+        // command to the server, and a release that is waiting must not look like one that
+        // was never asked for.
+        session.busy = 'releasing';
+        try {
+            if (stopFirst) {
+                // notify, not session.notice: clicking the confirm closes the session menu,
+                // so anything written only there is written to a panel that has just gone.
+                // The sidebar's message line stays on screen whatever tab is showing.
+                notify('Stopping the dish…');
+                await stopTracking();
+            }
+            standDown();
+            notify('Releasing control…');
+            closeClient();
+            const ok = await connectAndAuth({
+                host: session.host, port: session.port, user: session.user,
+                password: heldPassword,
+            });
+            if (!ok) {
+                notify('Control was given up, but reconnecting to watch failed.');
+            }
+        } catch (error) {
+            session.busy = '';
+            notify(`Could not release control: ${error.message}`);
+        }
+    }
+
+    async function logOut({ stopFirst = false } = {}) {
+        try {
+            if (stopFirst) await stopTracking();
+            standDown();
+            closeClient();
+            heldPassword = '';
+            session.notice = '';
+            session.error = '';
+            // Deliberately no login dialog. An hour of diagnostics, the position log and the
+            // sky tracks are all still worth reading; the header offers the way back in.
+            session.showLogin = false;
+        } catch (error) {
+            session.busy = '';
+            notify(`Could not log out cleanly: ${error.message}`);
+        }
+    }
+
+    function openLogin() {
+        session.error = '';
+        session.showLogin = true;
+    }
+
+    async function pollUsers() {
+        if (!readable()) return;
+        const stateWhenAsked = store.state;
+        try {
+            const response = await client.value.get_active_users();
+            if (!response.success) return;
+            store.users = response.users.filter((user) => user.account);
+            // A reply that was already in flight when control changed hands describes the
+            // world before it did. Reading it as evidence about the world after would drop
+            // control on the floor a moment after taking it.
+            if (store.state === stateWhenAsked) {
+                detectKick();
+            }
+        } catch { /* transient */ }
+    }
+
+    // Our own entry in the user list, which the server does not label.
+    //
+    // Every request stamps the sender's last_command_time before the reply to it is built
+    // (client_manager.py, top of process_message), so the newest last_active in a
+    // get_active_users reply always belongs to the connection that asked for it: this one.
+    // Another client would have to have sent a command in the microseconds since to tie, and
+    // a tie costs one wrong reading on a poll that runs again in two seconds.
+    //
+    // This is what makes a kick by somebody on the same account visible at all. The list is
+    // keyed by account, and one shared login per station is the ordinary arrangement, so
+    // comparing names distinguishes nothing in exactly the case that matters most.
+    function ownEntry(users) {
+        let mine = null;
+        for (const user of users) {
+            if (!mine || (user.last_active ?? 0) > (mine.last_active ?? 0)) {
+                mine = user;
+            }
+        }
+        return mine;
+    }
+
+    // A kick is silent: the server downgrades the connection to AUTHENTICATED and sends
+    // nothing at all. Without noticing it here the header would go on claiming control while
+    // every command came back refused -- and for a track the console sends nothing while it
+    // runs, so nothing would come back refused either, and it could claim control for as long
+    // as the track lasted.
+    function detectKick() {
+        if (store.state !== 'INITIALIZED') return;
+        const mine = ownEntry(store.users);
+        if (!mine || mine.state === 'INITIALIZED') return;
+
+        const other = store.users.find((user) => user !== mine && user.state === 'INITIALIZED');
+        loseControl(other
+            ? `${other.account} took control of the dish.`
+            : 'Dish control was taken by another user.');
+    }
+
+    // The server's answer when control has gone. A kick carries no notification of its own, so
+    // a refused command is often the first hard evidence of one.
+    function checkControlLost(reason) {
+        if (store.state === 'INITIALIZED' && /INITIALIZED state/.test(reason ?? '')) {
+            loseControl('Dish control was taken by another user.');
+            return true;
+        }
+        return false;
+    }
+
+    // Control has gone, one way or the other. Stop driving the dish and say so; the panels
+    // grey themselves out, since every one of them keys off store.state.
+    function loseControl(message) {
+        standDown(message);
+        store.state = 'AUTHENTICATED';
+        if (client.value) {
+            client.value.state = 'AUTHENTICATED';   // keep the client's own idea in step
+        }
+        notify(message);
     }
 
     // --- pointing at a target from the target list ---
@@ -335,7 +644,7 @@
     async function startStrobe(target, seconds) {
         const limit = Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_TRACK_S;
         if (store.state !== 'INITIALIZED') {
-            store.lastError = 'Dish control is required to track. Reconnect with control.';
+            store.lastError = 'Dish control is required to track. Take control from the header.';
             return;
         }
         stopStrobe();
@@ -382,6 +691,9 @@
                         'azel', message.az, message.el, message.az_vel, message.el_vel);
                     if (!response.success) {
                         stopStrobe(`Tracking stopped: ${response.reason}`);
+                        // in this order: losing control replaces that message with the
+                        // reason behind it, which is the more useful of the two
+                        checkControlLost(response.reason);
                     }
                 } catch (error) {
                     stopStrobe(`Tracking stopped: ${error.message}`);
@@ -568,6 +880,7 @@
             }
             if (!response.success) {
                 store.lastError = response.reason || `${command.action} command failed.`;
+                checkControlLost(response.reason);
                 return;
             }
 
@@ -625,6 +938,15 @@
         AUTHENTICATED: 'viewing',
         INITIALIZED: 'control',
     };
+
+    // What the lamp says. A session in transition gets its own word rather than the state
+    // underneath it: releasing control drops the connection for about a second, and reading
+    // "offline" while giving control back on purpose looks like a fault.
+    const stateWord = computed(() => ({
+        connecting: 'connecting',
+        taking: 'requesting',
+        releasing: 'releasing',
+    }[session.busy] ?? stateLabel[store.state]));
 </script>
 
 <template>
@@ -633,13 +955,16 @@
             <h1>{{ config.site.name }}<span class="subtitle">control console</span></h1>
             <div class="header-state" :class="'state-' + store.state.toLowerCase()">
                 <span class="lamp"></span>
-                <span class="state-word">{{ stateLabel[store.state] }}</span>
+                <span class="state-word">{{ stateWord }}</span>
             </div>
             <div class="header-actions">
                 <button class="signal" :disabled="store.state !== 'INITIALIZED' || !tracking"
                         @click="stopTracking">Stop tracking</button>
                 <button :disabled="store.state !== 'INITIALIZED'" @click="sendCommand({ action: 'stow' })">Stow</button>
                 <button :disabled="store.state !== 'INITIALIZED'" @click="sendCommand({ action: 'service' })">Service</button>
+                <SessionMenu :store="store" :session="session" :tracking="tracking"
+                             @open-login="openLogin" @take-control="takeControl"
+                             @release="releaseControl" @logout="logOut" />
                 <button class="theme-toggle" @click="toggleTheme"
                         :title="`Switch to the ${theme === 'dark' ? 'light' : 'dark'} theme`"
                         :aria-label="`Switch to the ${theme === 'dark' ? 'light' : 'dark'} theme`">{{ theme === 'dark' ? '☀' : '☾' }}</button>
@@ -654,7 +979,7 @@
                              @command="sendCommand" @goto-target="gotoTarget"
                              @track-target="trackTarget" />
                 <OffsetPanel :store="store" @apply="applyOffset" />
-                <UsersPanel :client="client" :store="store" />
+                <UsersPanel :store="store" />
             </aside>
 
             <section class="chart-area panel">
@@ -676,7 +1001,14 @@
             </section>
         </main>
 
-        <LoginModal v-if="showLogin" :config="config" :error-text="loginError" :busy="connecting" @connect="connect" />
+        <LoginModal v-if="session.showLogin" :config="config" :error-text="session.error"
+                    :busy="session.busy === 'connecting'" :can-cancel="Boolean(session.user)"
+                    @connect="connectAndAuth" @cancel="session.showLogin = false" />
+        <ControlConflictDialog v-if="session.conflict"
+                               :holders="session.conflict.holders" :reason="session.conflict.reason"
+                               :busy="session.busy === 'taking'"
+                               @cancel="session.conflict = null"
+                               @confirm="takeControl({ kick: true })" />
     </div>
 </template>
 
