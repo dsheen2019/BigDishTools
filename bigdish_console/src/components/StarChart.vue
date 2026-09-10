@@ -37,7 +37,9 @@
         planetarium.drawImmediate();
     }
 
-    const projectionChoice = ref('stereo');
+    // Polar to start with: the whole sky at once, laid out as the map tab's sky plot already
+    // is, so the two views can be read against each other without turning one of them first.
+    const projectionChoice = ref('polar');
     const PROJECTIONS = {
         stereo: 'Stereographic',
         polar: 'Polar',
@@ -153,7 +155,10 @@
             showstarlabels: true,
             gridlines_az: true,
             cardinalpoints: true,
-            constellations: true,
+            // off to start with: this chart is read for where the dish is pointing and where a
+            // target is going, and the lines cross both. VirtualSky's own "c" brings them
+            // back, listed with the rest of its keys under the help icon it draws top right.
+            constellations: false,
             showgalaxy: true,
             callback: {
                 click: (event) => {
