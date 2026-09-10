@@ -19,6 +19,9 @@
         // {low, high} to fix the axis, or null to scale to the data
         bounds: Object,
         windowSeconds: Number,
+        // How often a reading is kept, so the drawing can tell the ordinary spacing of the
+        // samples from a hole in them and not join a line across the second kind.
+        sampleSeconds: Number,
         // draw a line at zero, for the error plots
         zeroLine: Boolean,
         visible: Boolean,
@@ -181,42 +184,56 @@
 
         // --- the series ---
         const columns = Math.max(1, Math.round(plotWidth));
+
+        // What counts as a hole in the readings rather than their ordinary spacing. Samples
+        // are kept every sampleSeconds, but a column is often wider than that -- an hour
+        // across six hundred pixels is six seconds to the pixel -- and then neighbouring
+        // columns sit a column apart, not a sample apart. The threshold has to clear whichever
+        // is larger, or a perfectly healthy trace would be drawn as a dotted one.
+        const secondsPerColumn = props.windowSeconds / columns;
+        const maxGapSeconds = Math.max(3 * (props.sampleSeconds ?? 1), 1.5 * secondsPerColumn);
+
         for (const entry of props.series) {
             const buckets = props.history.decimate(entry.field, from, to, columns);
             if (buckets.length === 0) continue;
 
-            // Where a bucket runs past the axis, mark the column at the edge instead of
-            // clamping silently, so a slew reads as off the scale rather than as a steady
-            // error sitting exactly on the bound.
+            // A column with nothing inside the axis is left out, and the trace breaks there.
+            // Clamping it to the bound instead drew a slew as a solid bar along the edge --
+            // a reading the dish never took, in the one place the eye goes to judge whether
+            // the error is small. Absent says what is true: the value is off this scale.
             ctx.save();
             ctx.setLineDash(entry.dash ?? []);
             ctx.strokeStyle = colour[entry.field];
             ctx.lineWidth = entry.dash ? 1.2 : 1.4;
             ctx.beginPath();
-            let drawing = false;
+            // where the last drawn column sat, as a fraction across the span, or null when
+            // the line is broken and the next column in range starts a new subpath
+            let previousX = null;
             for (const bucket of buckets) {
+                if (bucket.max < bounds.low || bucket.min > bounds.high) {
+                    previousX = null;
+                    continue;
+                }
+                // A hole in the readings is not a straight line between its ends. Columns are
+                // joined only when they are close enough in time to be consecutive samples;
+                // where the recording stopped -- control lost, so there was nothing this
+                // console had commanded to measure an error against -- the trace stops too.
+                const joined = previousX !== null
+                    && (bucket.x - previousX) * props.windowSeconds <= maxGapSeconds;
                 const x = xOf(bucket.x);
+                // A column that straddles the bound keeps the part that is on the scale, so
+                // the trace climbs to the edge and stops rather than vanishing a column early.
                 const yMin = yOf(Math.max(bucket.min, bounds.low));
                 const yMax = yOf(Math.min(bucket.max, bounds.high));
-                if (!drawing) {
-                    ctx.moveTo(x, yMax);
-                    drawing = true;
-                } else {
+                if (joined) {
                     ctx.lineTo(x, yMax);
+                } else {
+                    ctx.moveTo(x, yMax);
                 }
                 if (yMin !== yMax) ctx.lineTo(x, yMin);
+                previousX = bucket.x;
             }
             ctx.stroke();
-
-            ctx.fillStyle = colour[entry.field];
-            for (const bucket of buckets) {
-                if (bucket.max > bounds.high) {
-                    ctx.fillRect(xOf(bucket.x) - 0.5, top + 1, 1.5, 3);
-                }
-                if (bucket.min < bounds.low) {
-                    ctx.fillRect(xOf(bucket.x) - 0.5, top + plotHeight - 4, 1.5, 3);
-                }
-            }
             ctx.restore();
         }
 

@@ -199,6 +199,15 @@
         if (command?.type !== 'track' || store.strobe?.active) {
             return;
         }
+        // Only while this console holds control. The server reports whatever command is
+        // running, whoever gave it, and a viewer could be shown that -- but only for a track,
+        // since a goto by somebody else is over by the time it could be read. Marks that
+        // appeared for one kind of command and not the other would say "nothing is commanded"
+        // when something was. So the commanded marks mean one thing throughout, on the map and
+        // on the position plot alike: what this console asked for.
+        if (store.state !== 'INITIALIZED') {
+            return;
+        }
         const frame = command.coords === 'gal' ? 'gal' : 'radec';
         const [coord1, coord2] = frame === 'gal'
             ? [command.l_pos, command.b_pos]
@@ -232,7 +241,12 @@
         let elError = null;
         let azVelError = null;
         let elVelError = null;
-        const expected = expectedAzElAt?.(time);
+        // Only while this console has control. The expectation is where *this* console last
+        // told the dish to point, so with somebody else driving -- or nobody -- it describes
+        // a command the dish was never given, and the difference from it is not a pointing
+        // error but the distance between two unrelated positions. Recorded as nothing, which
+        // the plots draw as a break in the trace rather than joining across it.
+        const expected = store.state === 'INITIALIZED' ? expectedAzElAt?.(time) : null;
         if (expected && Number.isFinite(d.az_pos)) {
             azError = angleDiff(d.az_pos, expected.az);
             elError = d.el_pos - expected.el;
@@ -285,6 +299,9 @@
         if (c) c.close();
         store.state = 'DISCONNECTED';
         store.users = [];
+        // as in standDown: a dropped session commands nothing, and claims nothing
+        expectedAzElAt = null;
+        store.commandedAzEl = null;
         // nothing to decide about a connection that has gone, and a dialog left up here would
         // outlive the session that raised it and cover the console from then on
         session.conflict = null;
@@ -435,9 +452,22 @@
     function standDown(reason = '') {
         stopStrobe(reason);
         if (['queued', 'running'].includes(schedule.state)) {
-            schedule.cancel();
+            // Cancelled without holding the dish. Every caller of this either asked the
+            // operator whether to stop the dish first and must not answer it for them, or has
+            // lost control and cannot command anything anyway -- and there the goto would be
+            // refused, and its refusal would overwrite the message saying control had gone
+            // with a confusing one about a rejected command.
+            schedule.cancel({ hold: false });
         }
         lastRequest = null;
+        // Nothing is expected of the dish by this console any more. Left set, it would be
+        // waiting to be believed again the moment control came back, and the error plot would
+        // resume against a command given before somebody else had their turn. The commanded
+        // marks on the map and the elevation quadrant go with it: they point at a command that
+        // is no longer this console's to claim, and with somebody else driving they would sit
+        // there contradicting a dish that is doing something else entirely.
+        expectedAzElAt = null;
+        store.commandedAzEl = null;
     }
 
     // Give control back and carry on watching.

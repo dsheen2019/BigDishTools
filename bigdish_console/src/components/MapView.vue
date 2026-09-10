@@ -124,10 +124,11 @@
     // The focused target's path from rise to set, drawn in that sky plot. Unlike the ground
     // beneath it this is angular, so it works the same for a satellite pass, the moon, or a
     // calibrator source -- and the dish's azimuth needle lines up with it directly.
-    function drawSkyTrack(ctx) {
-        if (!track?.points.length) return;
-
-        // elevation guides, so the radial axis can be read as angle rather than miles
+    // The radial axis read as angle rather than miles. Drawn whether or not a target is
+    // focused, because the needles are measured against it: their length is the elevation they
+    // are pointing at, and a scale that came and went with the sky track would leave that
+    // length meaning nothing for most of the time it is on screen.
+    function drawElevationScale(ctx) {
         ctx.setLineDash([2, 4]);
         ctx.strokeStyle = TRACK_DIM;
         ctx.lineWidth = 1;
@@ -158,6 +159,10 @@
             ctx.stroke();
             ctx.fillText(`${el}°`, x - 6, y);
         }
+    }
+
+    function drawSkyTrack(ctx) {
+        if (!track?.points.length) return;
 
         // the path itself
         ctx.beginPath();
@@ -395,6 +400,7 @@
             ctx.fillText(target.name.split(' ')[0], c.x + 9, c.y + 1);
         }
 
+        drawElevationScale(ctx);
         drawSkyTrack(ctx);
 
         // --- beam wedge and needles ---
@@ -402,12 +408,23 @@
         const commandedAz = props.store.commandedAzEl?.az;
         const beamwidth = props.config.dish.beamwidth_deg;
 
+        // How far out a needle reaches, as a fraction of the disc: the radius the sky plot
+        // puts that elevation at, so the tip lands on the target's own mark when the beam is
+        // on it, and the dashed elevation circles read the needle as well as they read the
+        // track. With no elevation to go on -- nothing commanded yet, no reading arrived --
+        // it runs the full radius, as it always did, and says only "this way".
+        const reach = (el) =>
+            (Number.isFinite(el) ? (90 - Math.max(0, Math.min(90, el))) / 90 : 1);
+        const currentReach = reach(props.store.azel?.el);
+        const commandedReach = reach(props.store.commandedAzEl?.el);
+
         if (currentAz !== undefined && currentAz !== null) {
-            // beam wedge: the great-circle edges at az +/- half the beamwidth
+            // beam wedge: the great-circle edges at az +/- half the beamwidth, ending where
+            // the needle does so the beam does not overshoot the direction it belongs to
             const left = azimuthPathPixels(meta, projection, currentAz - beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE).map(mapToCanvas);
+                meta.radius_miles * METERS_PER_MILE * currentReach).map(mapToCanvas);
             const right = azimuthPathPixels(meta, projection, currentAz + beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE).map(mapToCanvas);
+                meta.radius_miles * METERS_PER_MILE * currentReach).map(mapToCanvas);
             ctx.beginPath();
             left.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
             right.reverse().forEach((p) => ctx.lineTo(p.x, p.y));
@@ -420,24 +437,31 @@
             ctx.strokeStyle = SIGNAL;
             ctx.lineWidth = 1.5;
             ctx.setLineDash([6, 5]);
-            drawAzimuthPath(ctx, commandedAz);
+            drawAzimuthPath(ctx, commandedAz, commandedReach);
             ctx.setLineDash([]);
         }
 
         if (currentAz !== undefined && currentAz !== null) {
             ctx.strokeStyle = INK;
             ctx.lineWidth = 2.5;
-            const path = drawAzimuthPath(ctx, currentAz);
+            const path = drawAzimuthPath(ctx, currentAz, currentReach);
             const tip = path[path.length - 1];
             const prev = path[path.length - 2];
-            const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
-            ctx.beginPath();
-            ctx.moveTo(tip.x, tip.y);
-            ctx.lineTo(tip.x - 11 * Math.cos(angle - 0.32), tip.y - 11 * Math.sin(angle - 0.32));
-            ctx.lineTo(tip.x - 11 * Math.cos(angle + 0.32), tip.y - 11 * Math.sin(angle + 0.32));
-            ctx.closePath();
-            ctx.fillStyle = INK;
-            ctx.fill();
+            // Near the zenith the needle shrinks to almost nothing, and an arrowhead sized for
+            // the full-length one would be the whole of it, pointing whichever way two nearly
+            // coincident points happened to fall. Past that point the head is left off and the
+            // dish marker at the centre carries the reading.
+            const length = Math.hypot(tip.x - cx, tip.y - cy);
+            if (length > 14) {
+                const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
+                ctx.beginPath();
+                ctx.moveTo(tip.x, tip.y);
+                ctx.lineTo(tip.x - 11 * Math.cos(angle - 0.32), tip.y - 11 * Math.sin(angle - 0.32));
+                ctx.lineTo(tip.x - 11 * Math.cos(angle + 0.32), tip.y - 11 * Math.sin(angle + 0.32));
+                ctx.closePath();
+                ctx.fillStyle = INK;
+                ctx.fill();
+            }
         }
 
         // center: the dish

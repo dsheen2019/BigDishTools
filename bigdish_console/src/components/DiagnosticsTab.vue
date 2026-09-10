@@ -24,6 +24,7 @@
     const errorLimit = diagnostics.error_limit_deg ?? 3.0;
     const velocityErrorLimit = diagnostics.velocity_error_limit_dps ?? 0.5;
     const redrawSeconds = diagnostics.redraw_seconds ?? 5;
+    const sampleSeconds = diagnostics.sample_seconds ?? 1;
     const azRange = props.config.dish?.az_range ?? [0, 360];
     const elRange = props.config.dish?.el_range ?? [0, 90];
 
@@ -88,19 +89,24 @@
         <div class="grid">
             <TimeSeriesPlot class="left-1" :ref="collectPlot" :history="history" title="Position" unit="deg"
                             :series="positionSeries" :bounds="positionBounds"
-                            :window-seconds="windowSeconds" :visible="visible" :redraw-seconds="redrawSeconds" />
+                            :window-seconds="windowSeconds" :sample-seconds="sampleSeconds"
+                            :visible="visible" :redraw-seconds="redrawSeconds" />
             <TimeSeriesPlot class="left-2" :ref="collectPlot" :history="history" title="Pointing error" unit="deg"
                             :series="errorSeries" :bounds="errorBounds" zero-line
-                            :window-seconds="windowSeconds" :visible="visible" :redraw-seconds="redrawSeconds" />
+                            :window-seconds="windowSeconds" :sample-seconds="sampleSeconds"
+                            :visible="visible" :redraw-seconds="redrawSeconds" />
             <TimeSeriesPlot class="left-3" :ref="collectPlot" :history="history" title="Rate error" unit="deg/s"
                             :series="velocityErrorSeries" :bounds="velocityErrorBounds" zero-line
-                            :window-seconds="windowSeconds" :visible="visible" :redraw-seconds="redrawSeconds" />
+                            :window-seconds="windowSeconds" :sample-seconds="sampleSeconds"
+                            :visible="visible" :redraw-seconds="redrawSeconds" />
             <TimeSeriesPlot class="right-1" :ref="collectPlot" :history="history" title="Motor voltage" unit="V"
                             :series="voltageSeries" :bounds="null"
-                            :window-seconds="windowSeconds" :visible="visible" :redraw-seconds="redrawSeconds" />
+                            :window-seconds="windowSeconds" :sample-seconds="sampleSeconds"
+                            :visible="visible" :redraw-seconds="redrawSeconds" />
             <TimeSeriesPlot class="right-2" :ref="collectPlot" :history="history" title="Motor current" unit="A"
                             :series="currentSeries" :bounds="null"
-                            :window-seconds="windowSeconds" :visible="visible" :redraw-seconds="redrawSeconds" />
+                            :window-seconds="windowSeconds" :sample-seconds="sampleSeconds"
+                            :visible="visible" :redraw-seconds="redrawSeconds" />
         </div>
         <p class="status">{{ status }}</p>
     </div>

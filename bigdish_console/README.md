@@ -159,6 +159,12 @@ otherwise: the server runs the command it already has until that command ends, w
 anyone is left in control — which is the same thing that happens today when a browser tab is
 closed, and is what makes handing a running observation to the next operator possible.
 
+A queued or running pointing file does not survive it, though. The file is this console's to
+deliver, row by row, and a console that has given up control cannot deliver it, so releasing
+or logging out cancels it. Cancelling it that way deliberately does not hold the dish, unlike
+the Cancel button in the utilities tab: whether the dish keeps moving is the question you were
+just asked, and cancelling the file should not answer it for you.
+
 ## Themes
 
 The button at the right of the header switches between the dark console and a light one; the
@@ -230,8 +236,17 @@ the horizon — which is conveniently also where the map's outer range ring alre
 guide circles mark elevation 30° and 60°, the path carries clock ticks and rise/set marks, and
 the target's position now is a filled marker, with a caret on the degree ring at its azimuth
 and a line at the top right reading its az/el and set time, or when it next rises and how high
-it will get. Because azimuth is shared, the dish's own needle lines up with the track
-directly: when the needle points at the marker, the beam is on the target.
+it will get.
+
+The dish's own needles are drawn in that same plot, so they can be compared with the track
+directly. A needle carries azimuth as its direction and elevation as its length, reaching the
+radius the sky plot puts that elevation at — full to the rim on the horizon, shrinking to
+nothing overhead — which means the needle's **tip** is where the beam is pointing, not merely
+its bearing. When the tip sits on the target's marker, the dish is on the target, in both
+axes at once. The dashed elevation circles are therefore drawn whether or not a target is
+focused, since they are the scale that gives a needle's length its meaning; near the zenith
+the needle grows too short to carry an arrowhead, and the marker at the centre carries the
+reading instead.
 
 On the **star chart** the same samples are drawn in VirtualSky's projection, using its own
 `azel2xy`, repainted with every redraw. Note that the two views mirror each other, and both
@@ -261,10 +276,20 @@ means recomputing the target's az/el for each sample, since it moves; for a goto
 commanded position; and before anything has been commanded there is no error, so the plot is
 empty rather than showing zero.
 
+It is recorded only while this console holds control, and the commanded position with it —
+on the position plot, and as the dashed needle and elevation mark on the map. What both are measured against is where *this* console last told the
+dish to point, so with another operator driving — or nobody — they describe a command the dish
+was never given, and the difference from it is not a pointing error but the distance between
+two unrelated positions. Those stretches are recorded as nothing at all, and nothing is drawn
+across them: the trace breaks where the readings stop and picks up where they resume, rather
+than running a straight line over the interval to suggest a measurement that was never taken.
+
 `diagnostics.error_limit_deg` in `config.toml` fixes the error axis, deliberately tight —
 a converged track sits a few hundredths of a degree off, which an axis wide enough to hold a
-slew would flatten to nothing. Samples beyond the bound are marked at the edge of the plot
-rather than drawn as though they sat on it, so a slew reads as off-scale. `dish.az_range` and
+slew would flatten to nothing. Samples beyond the bound are simply not drawn, so the trace
+breaks and a slew reads as off the scale rather than as a bar along the edge of it — a value
+clamped to the bound is a reading the dish never took, in the very place the eye goes to
+judge whether the error is small. `dish.az_range` and
 `dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
 themselves.
 
