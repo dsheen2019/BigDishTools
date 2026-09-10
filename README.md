@@ -3,34 +3,28 @@ Tools for observations using bigdish and for modeling antenna performance
 
 Note: for now this is a work in progress and still needs extensive cleanup and documentation. 
 
+Most of the tools here were written by dsheen either as demo files, or for observaation modelling. 
+Particularly, the mapping tools folder provides some basic scripts for using the dish to scan 
+astronomical targets and the analysis examples folder includes notebooks with basic processing 
+flows. Antenna pattern models are included in the antenna_data folder and can be used to model 
+the expected beam response to astronomical targets, or to off-axis rfi sources. That folder also 
+includes scripts to import the patterns and rotate it in spherical coordinates.
+
 ## Control console
 
-`bigdish_console/` is a browser interface for driving the dish by hand: a regional map with
-the dish azimuth drawn over it as a polar chart, a star chart, manual pointing in az/el,
-ra/dec or galactic coordinates, a target list (calibrator sources, solar-system bodies,
-ground stations, satellites), pointing offsets in four frames, and a rise-to-set sky path
-drawn over both charts for the selected target. It runs on the operator's own machine and
-binds to loopback only.
+`bigdish_console/` is a browser interface for driving the dish by hand. it also provides a UI 
+interface for some of the other scripts here to support easy tracking of satellites or running 
+pre-planned pointing files. This code was largely AI generated and has not been sufficently 
+scrutinized to be safe to expose on a server. It ONLY binds to localhost and is meant to be run 
+locally. It also utilizes a user editable config for setting up certain features. Please do not 
+atttempt to set it up as an outward facing service. 
 
-The built app is committed, so on a machine with Python and no Node toolchain it is just:
+The built app is committed the rthe repo and can be run as:
 
 ```sh
 cd bigdish_console
 python3 serve.py                # http://127.0.0.1:8620/
 ```
-
-To rebuild it after changing anything under `bigdish_console/src` (Node 20.19+ needed), and
-commit the result so that stays true:
-
-```sh
-cd bigdish_console
-npm ci
-npm run build
-```
-
-`python3 tools/generate_map.py` regenerates the map image, needed only after changing the
-radius, projection or tile style in `public/config.json`; it is the one step that needs
-internet, and its output is committed too.
 
 It talks to the dish server through `dish_client/bigdish_client.js`, the browser counterpart
 to `bigdish_client.py` beside it. See [its README](./bigdish_console/README.md) for
@@ -40,7 +34,7 @@ specification.
 
 ## Requirements
 
-- [bigdish-client](https://github.com/w1xm/BigDishControlServer/tree/main/client), the
+- [bigdish-client](https://github.mit.edu/w1xm/BigDishControlServer/tree/main/client), the
   protocol client that the scripts here import as `bigdish_client`:
 
   ```sh

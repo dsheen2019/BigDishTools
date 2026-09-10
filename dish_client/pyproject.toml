@@ -1,0 +1,30 @@
+# Packaging for the Python client library alone, deliberately separate from the server:
+# a script that only needs to point the dish should not have to install the server's
+# astropy and CANbus dependencies. Install from a clone with
+#
+#     pip install -e ./client
+#
+# or straight from the repository with
+#
+#     pip install "bigdish-client @ git+https://github.com/w1xm/BigDishControlServer#subdirectory=client"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bigdish-client"
+version = "0.1.0"
+description = "Client library for the W1XM Big Dish control protocol"
+readme = "README.md"
+requires-python = ">=3.9"
+# websockets 12 is where the synchronous client this uses (websockets.sync.client) arrived
+dependencies = ["websockets>=12"]
+
+[project.urls]
+Homepage = "https://github.com/w1xm/BigDishControlServer"
+Protocol = "https://github.com/w1xm/BigDishControlServer/blob/main/protocol.md"
+
+[tool.setuptools]
+# a single module, so `from bigdish_client import BigDishClient` keeps working unchanged
+py-modules = ["bigdish_client"]
