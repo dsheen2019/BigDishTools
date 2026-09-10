@@ -183,6 +183,82 @@
         return lower.slice(0, -1).concat(upper.slice(0, -1));
     }
 
+    // Station names, placed so they do not land on one another or on another station's mark.
+    //
+    // Every name is tried in a ring of positions around its own dot, starting to the right,
+    // which is where they have always sat, and the first that lands clear is the one used.
+    // Marks are reserved before any name is placed, so a name never covers a station that has
+    // not been labelled yet -- otherwise the result would depend on the order of the target
+    // list. Every name is drawn in the end: where nothing is clear the least covered position
+    // wins, which in a crowd still fans the names out rather than piling them all on the same
+    // side, and a station is never left anonymous.
+    //
+    // Expects the caller to have set the label font and fill; the context is restored on the
+    // way out.
+    function drawStationLabels(ctx, markers) {
+        const PAD = 2;
+        const LINE = 12;   // the label's box height, for the hit test
+        const MARK = 8;    // the dot and the ring around it
+        // owner is the station a box belongs to, so a name can sit against its own dot -- which
+        // is the whole point of putting it there -- while still having to clear every other
+        // one. Labels already placed carry no owner and are in everybody's way.
+        const boxes = markers.map((m, i) => ({
+            left: m.x - MARK, right: m.x + MARK, top: m.y - MARK, bottom: m.y + MARK, owner: i,
+        }));
+        // How much of two boxes lies on top of the other, in square pixels: zero when they are
+        // clear, and a measure of how bad it is when they are not.
+        const cover = (a, b) => {
+            const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+            const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+            return w > 0 && h > 0 ? w * h : 0;
+        };
+
+        // right, left, above, below, then the diagonals; then the same again further out
+        const candidates = [];
+        for (const gap of [9, 20]) {
+            candidates.push(
+                [gap, 0, 'left'], [-gap, 0, 'right'],
+                [0, -gap - LINE / 2, 'center'], [0, gap + LINE / 2, 'center'],
+                [gap, -gap, 'left'], [-gap, -gap, 'right'],
+                [gap, gap, 'left'], [-gap, gap, 'right'],
+            );
+        }
+
+        ctx.save();
+        ctx.textBaseline = 'middle';
+        for (const [index, marker] of markers.entries()) {
+            const width = ctx.measureText(marker.label).width;
+            let best = null;
+            for (const [dx, dy, align] of candidates) {
+                const x = marker.x + dx;
+                const y = marker.y + dy;
+                const left = align === 'left' ? x
+                    : align === 'right' ? x - width : x - width / 2;
+                const box = {
+                    left: left - PAD, right: left + width + PAD,
+                    top: y - LINE / 2 - PAD, bottom: y + LINE / 2 + PAD,
+                };
+                let cost = 0;
+                for (const other of boxes) {
+                    if (other.owner !== index) cost += cover(box, other);
+                }
+                if (cost === 0) {
+                    best = { x, y, align, box, cost };
+                    break;      // the first clear one wins, so the usual place stays the usual place
+                }
+                if (best === null || cost < best.cost) {
+                    best = { x, y, align, box, cost };
+                }
+            }
+            // owned by the station it names, which has already been placed, so it stands in
+            // the way of every station still to come
+            boxes.push({ ...best.box, owner: index });
+            ctx.textAlign = best.align;
+            ctx.fillText(marker.label, best.x, best.y);
+        }
+        ctx.restore();
+    }
+
     // The focused target's path from rise to set, drawn in that sky plot. Unlike the ground
     // beneath it this is angular, so it works the same for a satellite pass, the moon, or a
     // calibrator source -- and the dish's azimuth needle lines up with it directly.
@@ -206,7 +282,7 @@
         // reading the same radius never sit on top of each other
         const axisAngle = ((330 - 90) * Math.PI) / 180;
         const across = axisAngle + Math.PI / 2;
-        ctx.font = '10px "IBM Plex Mono"';
+        ctx.font = '12px "IBM Plex Mono"';
         ctx.fillStyle = TRACK_DIM;
         ctx.strokeStyle = TRACK_DIM;
         ctx.textAlign = 'right';
@@ -240,7 +316,7 @@
         // clock ticks: often enough to read the pass, sparse enough not to crowd it
         const spanS = (track.set - track.rise) / 1000;
         const tickS = spanS <= 900 ? 120 : spanS <= 3600 ? 600 : spanS <= 14400 ? 1800 : 3600;
-        ctx.font = '9px "IBM Plex Mono"';
+        ctx.font = '11px "IBM Plex Mono"';
         ctx.textAlign = 'left';
         for (let i = 1; i < track.points.length; i++) {
             const p = track.points[i];
@@ -260,7 +336,7 @@
 
         // rise and set, unless it never sets
         if (!track.circumpolar) {
-            ctx.font = '600 10px "Barlow Condensed"';
+            ctx.font = '600 12px "Barlow Condensed"';
             for (const [label, point] of [['rise', track.points[0]],
                 ['set', track.points[track.points.length - 1]]]) {
                 const c = skyToCanvas(point.az, point.el);
@@ -293,7 +369,7 @@
         ctx.strokeStyle = TRACK;
         ctx.lineWidth = 1.5;
         ctx.stroke();
-        ctx.font = '600 11px "Barlow Condensed"';
+        ctx.font = '600 13px "Barlow Condensed"';
         ctx.textAlign = 'left';
         ctx.fillText(props.store.focus?.name ?? '', c.x + 12, c.y + 1);
     }
@@ -395,7 +471,7 @@
             const angle = ((d - 90) * Math.PI) / 180;
             const r = outer - 8;
             const cardinal = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[d];
-            ctx.font = cardinal ? '600 14px "Barlow Condensed"' : '500 12px "Barlow Condensed"';
+            ctx.font = cardinal ? '600 16px "Barlow Condensed"' : '500 14px "Barlow Condensed"';
             ctx.fillStyle = cardinal ? colour.readout : colour.label;
             ctx.fillText(cardinal ?? String(d), cx + r * Math.cos(angle), cy + r * Math.sin(angle));
         }
@@ -431,7 +507,7 @@
             ctx.lineTo(cx + disc * Math.cos(angle), cy + disc * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '10px "IBM Plex Mono"';
+        ctx.font = '12px "IBM Plex Mono"';
         ctx.fillStyle = 'rgba(70, 90, 115, 0.7)';
         const labelAngle = ((150 - 90) * Math.PI) / 180;
         for (let miles = ringStepMiles; miles < meta.radius_miles; miles += ringStepMiles) {
@@ -441,13 +517,16 @@
 
         // --- station markers ---
         stationMarkers = [];
-        ctx.font = '600 11px "Barlow Condensed"';
+        ctx.font = '600 13px "Barlow Condensed"';
         for (const target of props.targets) {
             if (target.latitude === undefined) continue;
             const c = mapToCanvas(projection.latLonToPixel(target.latitude, target.longitude));
             const inside = Math.hypot(c.x - cx, c.y - cy) <= disc - 4;
             if (!inside) continue;
-            stationMarkers.push({ x: c.x, y: c.y, name: target.name, bearing: target.coord1 });
+            stationMarkers.push({
+                x: c.x, y: c.y, name: target.name, bearing: target.coord1,
+                label: target.name.split(' ')[0],
+            });
             ctx.beginPath();
             ctx.arc(c.x, c.y, 3.5, 0, 2 * Math.PI);
             ctx.fillStyle = INK;
@@ -457,10 +536,10 @@
             ctx.strokeStyle = INK;
             ctx.lineWidth = 1;
             ctx.stroke();
-            ctx.fillStyle = INK;
-            ctx.textAlign = 'left';
-            ctx.fillText(target.name.split(' ')[0], c.x + 9, c.y + 1);
         }
+        // after every mark is down, so a name can be kept clear of all of them
+        ctx.fillStyle = INK;
+        drawStationLabels(ctx, stationMarkers);
 
         drawElevationScale(ctx);
         drawSkyTrack(ctx);
@@ -561,18 +640,18 @@
         const summary = focusSummary();
         if (summary) {
             ctx.textBaseline = 'top';
-            ctx.font = '12px "IBM Plex Mono"';
+            ctx.font = '14px "IBM Plex Mono"';
             ctx.fillStyle = colour.live;
             ctx.fillText(summary, rect.width - 8, 6);
             ctx.textBaseline = 'bottom';
         }
         if (hover) {
-            ctx.font = '12px "IBM Plex Mono"';
+            ctx.font = '14px "IBM Plex Mono"';
             ctx.fillStyle = colour.readout;
             ctx.fillText(`az ${hover.bearing.toFixed(1)}°  ${hover.distanceMiles.toFixed(0)} mi`,
                 rect.width - 8, rect.height - 22);
         }
-        ctx.font = '10px system-ui';
+        ctx.font = '12px system-ui';
         ctx.fillStyle = colour.label;
         ctx.fillText(meta.attribution, rect.width - 8, rect.height - 6);
     }
@@ -596,7 +675,7 @@
             ctx.lineTo(ox + size * Math.cos(angle), oy + size * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '500 11px "Barlow Condensed"';
+        ctx.font = '500 13px "Barlow Condensed"';
         ctx.fillStyle = colour.label;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -628,7 +707,7 @@
             ctx.lineTo(ox + (size - 12) * Math.cos(angle), oy + (size - 12) * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '600 12px "Barlow Condensed"';
+        ctx.font = '600 14px "Barlow Condensed"';
         ctx.fillStyle = colour.label;
         ctx.fillText('EL', ox + 4, oy - size - 8);
         ctx.restore();

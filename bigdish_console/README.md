@@ -94,7 +94,10 @@ Target types:
 
 - `fixed` — ra/dec or galactic coordinates; tracked by the server itself.
 - `station` — a ground station by lat/lon; becomes a map marker and an az/el goto at its
-  great-circle bearing.
+  great-circle bearing. The name is drawn beside its dot, or in one of a ring of positions
+  around it when that spot is taken, so that two stations close together do not print over
+  each other. Every station is named: where nothing is clear the least covered position is
+  used, which in a crowd fans the names out instead of piling them on one side.
 - `body` — a solar-system body by name (astronomy-engine); tracked by strobing
   `goto_posvel` az/el commands from a Web Worker, like
   `example_pointing_scripts/moon_tracker.py`.
