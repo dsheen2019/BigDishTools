@@ -121,6 +121,68 @@
         return { x: geom.cx + r * Math.cos(angle), y: geom.cy + r * Math.sin(angle) };
     }
 
+    // The beam's own footprint, in that same plot: a cone of beamwidth_deg across the sky is a
+    // small circle of half that radius around where the dish is pointing, and this is what that
+    // circle looks like once projected.
+    //
+    // The projection is azimuthal equidistant, so radius is zenith angle and the circle keeps
+    // its true angular size *radially* wherever it sits. Across the radius it does not: the
+    // same beam covers 2*rho/cos(el) of azimuth, which is 2*rho down at the horizon and the
+    // entire compass at the zenith, while the arc it is drawn on shrinks to nothing over the
+    // same journey. What survives of the two is a tangential stretch of z/sin(z) on the radial
+    // size -- exactly 1 overhead, pi/2 at the horizon -- so the mark is round in the middle of
+    // the chart and drawn out along the rim into an arc as the dish comes down.
+    const BEAM_STEPS = 48;
+
+    function beamEllipse(az, el, beamwidthDeg) {
+        const rho = beamwidthDeg / 2;
+        const zenith = Math.max(0, Math.min(90, 90 - el));
+        const zRad = (zenith * Math.PI) / 180;
+        const radial = (geom.disc * rho) / 90;
+        // z/sin(z), which is 1 in the limit but 0/0 at the zenith itself
+        const stretch = zRad < 1e-6 ? 1 : zRad / Math.sin(zRad);
+        const tangential = radial * stretch;
+
+        const centre = skyToCanvas(az, el);
+        const bearing = ((az - 90) * Math.PI) / 180;
+        const out = { x: Math.cos(bearing), y: Math.sin(bearing) };   // outward along the radius
+        const across = { x: -out.y, y: out.x };                       // along the arc
+        const points = [];
+        for (let i = 0; i < BEAM_STEPS; i++) {
+            const t = (2 * Math.PI * i) / BEAM_STEPS;
+            const a = radial * Math.cos(t);
+            const b = tangential * Math.sin(t);
+            points.push({
+                x: centre.x + a * out.x + b * across.x,
+                y: centre.y + a * out.y + b * across.y,
+            });
+        }
+        return points;
+    }
+
+    // Andrew's monotone chain. Wrapping the dish and the beam mark in one outline gives the
+    // wedge without having to work out where its sides touch the ellipse, and it degenerates
+    // to the ellipse alone when the dish is pointed near enough to the zenith for the centre
+    // of the chart to fall inside the mark.
+    function convexHull(points) {
+        const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+        const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+        const chain = (input) => {
+            const out = [];
+            for (const p of input) {
+                while (out.length >= 2
+                    && cross(out[out.length - 2], out[out.length - 1], p) <= 0) {
+                    out.pop();
+                }
+                out.push(p);
+            }
+            return out;
+        };
+        const lower = chain(sorted);
+        const upper = chain(sorted.reverse());
+        return lower.slice(0, -1).concat(upper.slice(0, -1));
+    }
+
     // The focused target's path from rise to set, drawn in that sky plot. Unlike the ground
     // beneath it this is angular, so it works the same for a satellite pass, the moon, or a
     // calibrator source -- and the dish's azimuth needle lines up with it directly.
@@ -418,18 +480,30 @@
         const currentReach = reach(props.store.azel?.el);
         const commandedReach = reach(props.store.commandedAzEl?.el);
 
-        if (currentAz !== undefined && currentAz !== null) {
-            // beam wedge: the great-circle edges at az +/- half the beamwidth, ending where
-            // the needle does so the beam does not overshoot the direction it belongs to
-            const left = azimuthPathPixels(meta, projection, currentAz - beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE * currentReach).map(mapToCanvas);
-            const right = azimuthPathPixels(meta, projection, currentAz + beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE * currentReach).map(mapToCanvas);
-            ctx.beginPath();
-            left.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-            right.reverse().forEach((p) => ctx.lineTo(p.x, p.y));
-            ctx.closePath();
+        // The beam: a wedge opening from the dish out to its footprint on the sky. The far end
+        // is the beam mark itself, sized and distorted as the projection demands, so what the
+        // wedge widens to is the patch of sky the beam actually covers rather than a fixed
+        // spread of azimuth carried out to the rim.
+        const currentEl = props.store.azel?.el;
+        if (Number.isFinite(currentAz) && Number.isFinite(currentEl)) {
+            const mark = beamEllipse(currentAz, currentEl, beamwidth);
+            const outline = convexHull([{ x: cx, y: cy }, ...mark]);
             ctx.fillStyle = BEAM;
+
+            ctx.beginPath();
+            outline.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.closePath();
+            ctx.fill();
+
+            // The footprint again, over the wedge that reaches it. The wedge's sides run
+            // tangent to this mark, and they touch it at its widest -- which is about its
+            // middle -- so on its own the wedge swallows the near half and what is left
+            // reading as the beam is the far cap, half the width the beam really is. Drawn
+            // twice, the fill is a shade denser over the mark, and the whole 2.9 degrees of
+            // it can be read against the elevation circles.
+            ctx.beginPath();
+            mark.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.closePath();
             ctx.fill();
         }
 

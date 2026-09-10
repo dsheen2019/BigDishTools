@@ -248,6 +248,24 @@ focused, since they are the scale that gives a needle's length its meaning; near
 the needle grows too short to carry an arrowhead, and the marker at the centre carries the
 reading instead.
 
+The green beam wedge opens from the dish out to the patch of sky the beam actually covers, so
+what it widens to is a footprint rather than a fixed spread of azimuth carried to the rim.
+`dish.beamwidth_deg` is a cone across the sky, and a cone is a circle on the sky; in this
+projection that circle becomes an ellipse. Radius is zenith angle, so the mark keeps its true
+angular size *radially* wherever it sits. Across the radius it does not: the same beam covers
+`2ρ/cos(el)` of azimuth — 2ρ down at the horizon, the whole compass at the zenith — while the
+arc it is drawn on shrinks to nothing over that same journey. What survives of the two is a
+tangential stretch of `z/sin z`, exactly 1 overhead and π/2 at the horizon. So the mark is
+round in the middle of the chart and is drawn out along the rim into an arc as the dish comes
+down. Point near enough to the zenith and the centre of the chart falls inside the mark, at
+which point the wedge is the mark.
+
+The footprint is drawn over the wedge as well as at the end of it, which is why it reads as a
+denser patch. The wedge's sides are tangents to the mark and touch it at its widest — about
+its middle — so a wedge drawn alone absorbs the near half of the footprint, and what is left
+looking like the beam is the far cap, half the width the beam really is. Drawn twice, the
+whole of it can be measured against the elevation circles.
+
 On the **star chart** the same samples are drawn in VirtualSky's projection, using its own
 `azel2xy`, repainted with every redraw. Note that the two views mirror each other, and both
 are right: the map looks down (north up, east right, compass convention) while the star chart
