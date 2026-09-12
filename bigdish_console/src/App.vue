@@ -7,7 +7,7 @@
     import { TelemetryHistory } from './lib/history.js';
     import { PositionLog } from './lib/position_log.js';
     import { Schedule } from './lib/schedule.js';
-    import { angleDiff } from './lib/projection.js';
+    import { angleDiff, wrap180 } from './lib/projection.js';
     import LoginModal from './components/LoginModal.vue';
     import SessionMenu from './components/SessionMenu.vue';
     import ControlConflictDialog from './components/ControlConflictDialog.vue';
@@ -156,6 +156,14 @@
             try {
                 const d = await client.value.get_posvel(['azel', 'radec', 'gal'], true);
                 if (d.success) {
+                    // Elevation, once, before anything reads it: the encoder counts a whole
+                    // turn, so a dish a hair below the horizon comes back as 359-something,
+                    // and every place that takes a difference from it -- the readout, the
+                    // needle on the map, the pointing error -- would read that as most of a
+                    // circle away from zero instead of a hundredth of a degree below it.
+                    // Azimuth is left as it is: 0 to 360 is how a bearing is spoken, and the
+                    // wrap there falls at north, where it belongs.
+                    d.el_pos = wrap180(d.el_pos);
                     store.azel = { az: d.az_pos, el: d.el_pos, az_vel: d.az_vel, el_vel: d.el_vel };
                     store.radec = { ra: d.ra_pos, dec: d.dec_pos };
                     store.gal = { l: d.l_pos, b: d.b_pos };

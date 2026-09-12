@@ -315,6 +315,16 @@ judge whether the error is small. `dish.az_range` and
 `dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
 themselves.
 
+Elevation is read as a signed angle, in (-180, 180], everywhere it is used: the readout, the
+needle on the map, the pointing error and this plot. The encoder counts a whole turn, so a
+dish resting on the horizon reports a hair either side of zero and half of those readings come
+back as 359-something. Left alone they read as most of a circle from where the dish is, which
+is a readout that flickers the width of the panel, and an error of 360 degrees at the moment
+the dish is doing exactly what it was told. Azimuth keeps its 0 to 360, which is how a bearing
+is spoken and puts the wrap at north where it belongs. Set `dish.el_range` low enough to hold
+a negative reading — the default is -3, the floor an az/el command is allowed — or samples at
+the horizon fall off the bottom of the plot and break the trace.
+
 The plots also carry the commanded position, dotted, behind the measured one; on a healthy
 track the two lie on top of each other, which is why they are told apart by line style rather
 than by shade.

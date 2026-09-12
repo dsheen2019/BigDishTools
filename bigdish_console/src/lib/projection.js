@@ -14,6 +14,13 @@ export function wrap360(a) {
     return ((a % 360) + 360) % 360;
 }
 
+// The same angle written in (-180, 180] instead of [0, 360). For quantities that live either
+// side of zero and are reported modulo a full turn: elevation at the horizon reads 359.98 as
+// readily as 0.02, and the two are a hundredth of a degree apart rather than most of a circle.
+export function wrap180(a) {
+    return Number.isFinite(a) ? angleDiff(a, 0) : a;
+}
+
 // Shortest signed angular difference a - b, in (-180, 180].
 export function angleDiff(a, b) {
     let d = (a - b) % 360;

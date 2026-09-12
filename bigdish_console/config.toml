@@ -55,7 +55,10 @@ service_azel = [60.0, 0.0]
 # the trace keeps its place on the axis rather than the axis moving under it. Nothing in the
 # server declares these, so set them to what the dish can actually reach.
 az_range = [0.0, 360.0]
-el_range = [0.0, 90.0]
+el_range = [-3.0, 90.0]      # down to the floor an azel command is allowed, not to zero: the
+                             # console reads elevation as a signed angle, so a dish sitting on
+                             # the horizon reports a hair either side of zero, and a plot that
+                             # stopped at zero would drop half of those readings
 
 # Position, pointing error, motor voltage and motor current over the last window_minutes.
 # Voltage and current scale themselves to whatever has been seen.
