@@ -121,13 +121,152 @@
         return { x: geom.cx + r * Math.cos(angle), y: geom.cy + r * Math.sin(angle) };
     }
 
+    // The beam's own footprint, in that same plot: a cone of beamwidth_deg across the sky is a
+    // small circle of half that radius around where the dish is pointing, and this is what that
+    // circle looks like once projected.
+    //
+    // The projection is azimuthal equidistant, so radius is zenith angle and the circle keeps
+    // its true angular size *radially* wherever it sits. Across the radius it does not: the
+    // same beam covers 2*rho/cos(el) of azimuth, which is 2*rho down at the horizon and the
+    // entire compass at the zenith, while the arc it is drawn on shrinks to nothing over the
+    // same journey. What survives of the two is a tangential stretch of z/sin(z) on the radial
+    // size -- exactly 1 overhead, pi/2 at the horizon -- so the mark is round in the middle of
+    // the chart and drawn out along the rim into an arc as the dish comes down.
+    const BEAM_STEPS = 48;
+
+    function beamEllipse(az, el, beamwidthDeg) {
+        const rho = beamwidthDeg / 2;
+        const zenith = Math.max(0, Math.min(90, 90 - el));
+        const zRad = (zenith * Math.PI) / 180;
+        const radial = (geom.disc * rho) / 90;
+        // z/sin(z), which is 1 in the limit but 0/0 at the zenith itself
+        const stretch = zRad < 1e-6 ? 1 : zRad / Math.sin(zRad);
+        const tangential = radial * stretch;
+
+        const centre = skyToCanvas(az, el);
+        const bearing = ((az - 90) * Math.PI) / 180;
+        const out = { x: Math.cos(bearing), y: Math.sin(bearing) };   // outward along the radius
+        const across = { x: -out.y, y: out.x };                       // along the arc
+        const points = [];
+        for (let i = 0; i < BEAM_STEPS; i++) {
+            const t = (2 * Math.PI * i) / BEAM_STEPS;
+            const a = radial * Math.cos(t);
+            const b = tangential * Math.sin(t);
+            points.push({
+                x: centre.x + a * out.x + b * across.x,
+                y: centre.y + a * out.y + b * across.y,
+            });
+        }
+        return points;
+    }
+
+    // Andrew's monotone chain. Wrapping the dish and the beam mark in one outline gives the
+    // wedge without having to work out where its sides touch the ellipse, and it degenerates
+    // to the ellipse alone when the dish is pointed near enough to the zenith for the centre
+    // of the chart to fall inside the mark.
+    function convexHull(points) {
+        const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+        const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+        const chain = (input) => {
+            const out = [];
+            for (const p of input) {
+                while (out.length >= 2
+                    && cross(out[out.length - 2], out[out.length - 1], p) <= 0) {
+                    out.pop();
+                }
+                out.push(p);
+            }
+            return out;
+        };
+        const lower = chain(sorted);
+        const upper = chain(sorted.reverse());
+        return lower.slice(0, -1).concat(upper.slice(0, -1));
+    }
+
+    // Station names, placed so they do not land on one another or on another station's mark.
+    //
+    // Every name is tried in a ring of positions around its own dot, starting to the right,
+    // which is where they have always sat, and the first that lands clear is the one used.
+    // Marks are reserved before any name is placed, so a name never covers a station that has
+    // not been labelled yet -- otherwise the result would depend on the order of the target
+    // list. Every name is drawn in the end: where nothing is clear the least covered position
+    // wins, which in a crowd still fans the names out rather than piling them all on the same
+    // side, and a station is never left anonymous.
+    //
+    // Expects the caller to have set the label font and fill; the context is restored on the
+    // way out.
+    function drawStationLabels(ctx, markers) {
+        const PAD = 2;
+        const LINE = 12;   // the label's box height, for the hit test
+        const MARK = 8;    // the dot and the ring around it
+        // owner is the station a box belongs to, so a name can sit against its own dot -- which
+        // is the whole point of putting it there -- while still having to clear every other
+        // one. Labels already placed carry no owner and are in everybody's way.
+        const boxes = markers.map((m, i) => ({
+            left: m.x - MARK, right: m.x + MARK, top: m.y - MARK, bottom: m.y + MARK, owner: i,
+        }));
+        // How much of two boxes lies on top of the other, in square pixels: zero when they are
+        // clear, and a measure of how bad it is when they are not.
+        const cover = (a, b) => {
+            const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+            const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+            return w > 0 && h > 0 ? w * h : 0;
+        };
+
+        // right, left, above, below, then the diagonals; then the same again further out
+        const candidates = [];
+        for (const gap of [9, 20]) {
+            candidates.push(
+                [gap, 0, 'left'], [-gap, 0, 'right'],
+                [0, -gap - LINE / 2, 'center'], [0, gap + LINE / 2, 'center'],
+                [gap, -gap, 'left'], [-gap, -gap, 'right'],
+                [gap, gap, 'left'], [-gap, gap, 'right'],
+            );
+        }
+
+        ctx.save();
+        ctx.textBaseline = 'middle';
+        for (const [index, marker] of markers.entries()) {
+            const width = ctx.measureText(marker.label).width;
+            let best = null;
+            for (const [dx, dy, align] of candidates) {
+                const x = marker.x + dx;
+                const y = marker.y + dy;
+                const left = align === 'left' ? x
+                    : align === 'right' ? x - width : x - width / 2;
+                const box = {
+                    left: left - PAD, right: left + width + PAD,
+                    top: y - LINE / 2 - PAD, bottom: y + LINE / 2 + PAD,
+                };
+                let cost = 0;
+                for (const other of boxes) {
+                    if (other.owner !== index) cost += cover(box, other);
+                }
+                if (cost === 0) {
+                    best = { x, y, align, box, cost };
+                    break;      // the first clear one wins, so the usual place stays the usual place
+                }
+                if (best === null || cost < best.cost) {
+                    best = { x, y, align, box, cost };
+                }
+            }
+            // owned by the station it names, which has already been placed, so it stands in
+            // the way of every station still to come
+            boxes.push({ ...best.box, owner: index });
+            ctx.textAlign = best.align;
+            ctx.fillText(marker.label, best.x, best.y);
+        }
+        ctx.restore();
+    }
+
     // The focused target's path from rise to set, drawn in that sky plot. Unlike the ground
     // beneath it this is angular, so it works the same for a satellite pass, the moon, or a
     // calibrator source -- and the dish's azimuth needle lines up with it directly.
-    function drawSkyTrack(ctx) {
-        if (!track?.points.length) return;
-
-        // elevation guides, so the radial axis can be read as angle rather than miles
+    // The radial axis read as angle rather than miles. Drawn whether or not a target is
+    // focused, because the needles are measured against it: their length is the elevation they
+    // are pointing at, and a scale that came and went with the sky track would leave that
+    // length meaning nothing for most of the time it is on screen.
+    function drawElevationScale(ctx) {
         ctx.setLineDash([2, 4]);
         ctx.strokeStyle = TRACK_DIM;
         ctx.lineWidth = 1;
@@ -143,7 +282,7 @@
         // reading the same radius never sit on top of each other
         const axisAngle = ((330 - 90) * Math.PI) / 180;
         const across = axisAngle + Math.PI / 2;
-        ctx.font = '10px "IBM Plex Mono"';
+        ctx.font = '12px "IBM Plex Mono"';
         ctx.fillStyle = TRACK_DIM;
         ctx.strokeStyle = TRACK_DIM;
         ctx.textAlign = 'right';
@@ -158,6 +297,10 @@
             ctx.stroke();
             ctx.fillText(`${el}°`, x - 6, y);
         }
+    }
+
+    function drawSkyTrack(ctx) {
+        if (!track?.points.length) return;
 
         // the path itself
         ctx.beginPath();
@@ -173,7 +316,7 @@
         // clock ticks: often enough to read the pass, sparse enough not to crowd it
         const spanS = (track.set - track.rise) / 1000;
         const tickS = spanS <= 900 ? 120 : spanS <= 3600 ? 600 : spanS <= 14400 ? 1800 : 3600;
-        ctx.font = '9px "IBM Plex Mono"';
+        ctx.font = '11px "IBM Plex Mono"';
         ctx.textAlign = 'left';
         for (let i = 1; i < track.points.length; i++) {
             const p = track.points[i];
@@ -193,7 +336,7 @@
 
         // rise and set, unless it never sets
         if (!track.circumpolar) {
-            ctx.font = '600 10px "Barlow Condensed"';
+            ctx.font = '600 12px "Barlow Condensed"';
             for (const [label, point] of [['rise', track.points[0]],
                 ['set', track.points[track.points.length - 1]]]) {
                 const c = skyToCanvas(point.az, point.el);
@@ -226,7 +369,7 @@
         ctx.strokeStyle = TRACK;
         ctx.lineWidth = 1.5;
         ctx.stroke();
-        ctx.font = '600 11px "Barlow Condensed"';
+        ctx.font = '600 13px "Barlow Condensed"';
         ctx.textAlign = 'left';
         ctx.fillText(props.store.focus?.name ?? '', c.x + 12, c.y + 1);
     }
@@ -328,7 +471,7 @@
             const angle = ((d - 90) * Math.PI) / 180;
             const r = outer - 8;
             const cardinal = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[d];
-            ctx.font = cardinal ? '600 14px "Barlow Condensed"' : '500 12px "Barlow Condensed"';
+            ctx.font = cardinal ? '600 16px "Barlow Condensed"' : '500 14px "Barlow Condensed"';
             ctx.fillStyle = cardinal ? colour.readout : colour.label;
             ctx.fillText(cardinal ?? String(d), cx + r * Math.cos(angle), cy + r * Math.sin(angle));
         }
@@ -364,7 +507,7 @@
             ctx.lineTo(cx + disc * Math.cos(angle), cy + disc * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '10px "IBM Plex Mono"';
+        ctx.font = '12px "IBM Plex Mono"';
         ctx.fillStyle = 'rgba(70, 90, 115, 0.7)';
         const labelAngle = ((150 - 90) * Math.PI) / 180;
         for (let miles = ringStepMiles; miles < meta.radius_miles; miles += ringStepMiles) {
@@ -374,13 +517,16 @@
 
         // --- station markers ---
         stationMarkers = [];
-        ctx.font = '600 11px "Barlow Condensed"';
+        ctx.font = '600 13px "Barlow Condensed"';
         for (const target of props.targets) {
             if (target.latitude === undefined) continue;
             const c = mapToCanvas(projection.latLonToPixel(target.latitude, target.longitude));
             const inside = Math.hypot(c.x - cx, c.y - cy) <= disc - 4;
             if (!inside) continue;
-            stationMarkers.push({ x: c.x, y: c.y, name: target.name, bearing: target.coord1 });
+            stationMarkers.push({
+                x: c.x, y: c.y, name: target.name, bearing: target.coord1,
+                label: target.name.split(' ')[0],
+            });
             ctx.beginPath();
             ctx.arc(c.x, c.y, 3.5, 0, 2 * Math.PI);
             ctx.fillStyle = INK;
@@ -390,11 +536,12 @@
             ctx.strokeStyle = INK;
             ctx.lineWidth = 1;
             ctx.stroke();
-            ctx.fillStyle = INK;
-            ctx.textAlign = 'left';
-            ctx.fillText(target.name.split(' ')[0], c.x + 9, c.y + 1);
         }
+        // after every mark is down, so a name can be kept clear of all of them
+        ctx.fillStyle = INK;
+        drawStationLabels(ctx, stationMarkers);
 
+        drawElevationScale(ctx);
         drawSkyTrack(ctx);
 
         // --- beam wedge and needles ---
@@ -402,17 +549,40 @@
         const commandedAz = props.store.commandedAzEl?.az;
         const beamwidth = props.config.dish.beamwidth_deg;
 
-        if (currentAz !== undefined && currentAz !== null) {
-            // beam wedge: the great-circle edges at az +/- half the beamwidth
-            const left = azimuthPathPixels(meta, projection, currentAz - beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE).map(mapToCanvas);
-            const right = azimuthPathPixels(meta, projection, currentAz + beamwidth / 2,
-                meta.radius_miles * METERS_PER_MILE).map(mapToCanvas);
-            ctx.beginPath();
-            left.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-            right.reverse().forEach((p) => ctx.lineTo(p.x, p.y));
-            ctx.closePath();
+        // How far out a needle reaches, as a fraction of the disc: the radius the sky plot
+        // puts that elevation at, so the tip lands on the target's own mark when the beam is
+        // on it, and the dashed elevation circles read the needle as well as they read the
+        // track. With no elevation to go on -- nothing commanded yet, no reading arrived --
+        // it runs the full radius, as it always did, and says only "this way".
+        const reach = (el) =>
+            (Number.isFinite(el) ? (90 - Math.max(0, Math.min(90, el))) / 90 : 1);
+        const currentReach = reach(props.store.azel?.el);
+        const commandedReach = reach(props.store.commandedAzEl?.el);
+
+        // The beam: a wedge opening from the dish out to its footprint on the sky. The far end
+        // is the beam mark itself, sized and distorted as the projection demands, so what the
+        // wedge widens to is the patch of sky the beam actually covers rather than a fixed
+        // spread of azimuth carried out to the rim.
+        const currentEl = props.store.azel?.el;
+        if (Number.isFinite(currentAz) && Number.isFinite(currentEl)) {
+            const mark = beamEllipse(currentAz, currentEl, beamwidth);
+            const outline = convexHull([{ x: cx, y: cy }, ...mark]);
             ctx.fillStyle = BEAM;
+
+            ctx.beginPath();
+            outline.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.closePath();
+            ctx.fill();
+
+            // The footprint again, over the wedge that reaches it. The wedge's sides run
+            // tangent to this mark, and they touch it at its widest -- which is about its
+            // middle -- so on its own the wedge swallows the near half and what is left
+            // reading as the beam is the far cap, half the width the beam really is. Drawn
+            // twice, the fill is a shade denser over the mark, and the whole 2.9 degrees of
+            // it can be read against the elevation circles.
+            ctx.beginPath();
+            mark.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.closePath();
             ctx.fill();
         }
 
@@ -420,24 +590,31 @@
             ctx.strokeStyle = SIGNAL;
             ctx.lineWidth = 1.5;
             ctx.setLineDash([6, 5]);
-            drawAzimuthPath(ctx, commandedAz);
+            drawAzimuthPath(ctx, commandedAz, commandedReach);
             ctx.setLineDash([]);
         }
 
         if (currentAz !== undefined && currentAz !== null) {
             ctx.strokeStyle = INK;
             ctx.lineWidth = 2.5;
-            const path = drawAzimuthPath(ctx, currentAz);
+            const path = drawAzimuthPath(ctx, currentAz, currentReach);
             const tip = path[path.length - 1];
             const prev = path[path.length - 2];
-            const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
-            ctx.beginPath();
-            ctx.moveTo(tip.x, tip.y);
-            ctx.lineTo(tip.x - 11 * Math.cos(angle - 0.32), tip.y - 11 * Math.sin(angle - 0.32));
-            ctx.lineTo(tip.x - 11 * Math.cos(angle + 0.32), tip.y - 11 * Math.sin(angle + 0.32));
-            ctx.closePath();
-            ctx.fillStyle = INK;
-            ctx.fill();
+            // Near the zenith the needle shrinks to almost nothing, and an arrowhead sized for
+            // the full-length one would be the whole of it, pointing whichever way two nearly
+            // coincident points happened to fall. Past that point the head is left off and the
+            // dish marker at the centre carries the reading.
+            const length = Math.hypot(tip.x - cx, tip.y - cy);
+            if (length > 14) {
+                const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
+                ctx.beginPath();
+                ctx.moveTo(tip.x, tip.y);
+                ctx.lineTo(tip.x - 11 * Math.cos(angle - 0.32), tip.y - 11 * Math.sin(angle - 0.32));
+                ctx.lineTo(tip.x - 11 * Math.cos(angle + 0.32), tip.y - 11 * Math.sin(angle + 0.32));
+                ctx.closePath();
+                ctx.fillStyle = INK;
+                ctx.fill();
+            }
         }
 
         // center: the dish
@@ -463,18 +640,18 @@
         const summary = focusSummary();
         if (summary) {
             ctx.textBaseline = 'top';
-            ctx.font = '12px "IBM Plex Mono"';
+            ctx.font = '14px "IBM Plex Mono"';
             ctx.fillStyle = colour.live;
             ctx.fillText(summary, rect.width - 8, 6);
             ctx.textBaseline = 'bottom';
         }
         if (hover) {
-            ctx.font = '12px "IBM Plex Mono"';
+            ctx.font = '14px "IBM Plex Mono"';
             ctx.fillStyle = colour.readout;
             ctx.fillText(`az ${hover.bearing.toFixed(1)}°  ${hover.distanceMiles.toFixed(0)} mi`,
                 rect.width - 8, rect.height - 22);
         }
-        ctx.font = '10px system-ui';
+        ctx.font = '12px system-ui';
         ctx.fillStyle = colour.label;
         ctx.fillText(meta.attribution, rect.width - 8, rect.height - 6);
     }
@@ -498,7 +675,7 @@
             ctx.lineTo(ox + size * Math.cos(angle), oy + size * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '500 11px "Barlow Condensed"';
+        ctx.font = '500 13px "Barlow Condensed"';
         ctx.fillStyle = colour.label;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -530,7 +707,7 @@
             ctx.lineTo(ox + (size - 12) * Math.cos(angle), oy + (size - 12) * Math.sin(angle));
             ctx.stroke();
         }
-        ctx.font = '600 12px "Barlow Condensed"';
+        ctx.font = '600 14px "Barlow Condensed"';
         ctx.fillStyle = colour.label;
         ctx.fillText('EL', ox + 4, oy - size - 8);
         ctx.restore();

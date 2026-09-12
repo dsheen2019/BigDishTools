@@ -94,7 +94,10 @@ Target types:
 
 - `fixed` — ra/dec or galactic coordinates; tracked by the server itself.
 - `station` — a ground station by lat/lon; becomes a map marker and an az/el goto at its
-  great-circle bearing.
+  great-circle bearing. The name is drawn beside its dot, or in one of a ring of positions
+  around it when that spot is taken, so that two stations close together do not print over
+  each other. Every station is named: where nothing is clear the least covered position is
+  used, which in a crowd fans the names out instead of piling them on one side.
 - `body` — a solar-system body by name (astronomy-engine); tracked by strobing
   `goto_posvel` az/el commands from a Web Worker, like
   `example_pointing_scripts/moon_tracker.py`.
@@ -102,6 +105,68 @@ Target types:
   with satellite.js (SGP4), strobed the same way. OMM supersedes the two-line format, which
   cannot carry catalog numbers past five digits; a TLE is still accepted if that is what you
   have.
+
+## Connecting and control
+
+Connecting and taking control are two steps, and the second one lives in the header rather
+than in the startup dialog. The dialog gets you as far as an authenticated, view-only
+session; the session menu at the right of the header — `user@host:port` — is where control
+is asked for, given back, and logged out of.
+
+The order is forced by the protocol and is the better order anyway: the server will not tell
+a connection who else is on until it has authenticated, so there is no way to know whether
+taking control means taking it off somebody until you are already connected. Asking first
+and deciding second means the kick is made with the other operator's name and how long since
+they last moved the dish in front of you, rather than as a checkbox ticked before there was
+anything to know. **Connect and take control** in the dialog runs both steps for the common
+case where nobody else is on, and falls back to the same dialog if somebody is.
+
+Everything the console does for its own sake — the map and star chart, the diagnostics
+history, the position log, a queued pointing file's countdown — needs no more than an
+authenticated connection, so stepping back to view only costs none of it. Logging out
+deliberately does not put the dialog back up: an hour of diagnostics is still worth reading,
+and the header offers the way back in.
+
+Two things are worth knowing about how this works against the current server.
+
+**Releasing control drops the connection for about a second.** The protocol has no message
+for giving control back — a connection leaves the controlling state only by being kicked or
+by going away — so releasing means closing the socket and immediately reconnecting as a
+viewer, which the server reads as an ordinary disconnect. The console does this for you and
+says what it is doing, but the second off the air is real: it shows up as a gap in the
+position log, which counts and reports such gaps, and as a notch in the diagnostics traces.
+It also means the password is held in memory for the session, to authenticate again. A
+`release` message would make it a single round trip and remove both costs; see `todo.txt` in
+the repository root.
+
+**A kick is worked out rather than announced.** The server sends nothing when it takes
+control away, and the user list it does offer is keyed by account rather than by connection,
+so with one shared login per station — the ordinary arrangement — two windows are
+indistinguishable in it by name. The console picks its own entry out of the list by
+timestamp instead: the server stamps the sender's last-active time before building the reply,
+so the newest entry in an answer is always the connection that asked for it. Reading the
+state off that entry catches a kick by anyone, on any account, within one poll, and it is
+what makes losing control during a *track* visible at all — a track is run by the server, so
+a console that has quietly lost control sends nothing that could come back refused, and would
+otherwise go on claiming control for as long as the track lasted.
+
+This is an inference, not a label: two connections that sent a command in the same microsecond
+would tie, and the loser would misread one poll before the next corrected it. `todo.txt`
+describes the one-field server change that would make it a fact instead. Independently of it,
+the answer to any refused command or control request is taken as the authority on which state
+this console is really in, so a drifted header corrects itself the moment anything is asked.
+
+While control is held, releasing or logging out while the dish is following something asks
+first, and offers to stop the dish on the way out. Giving up control does not stop it
+otherwise: the server runs the command it already has until that command ends, whether or not
+anyone is left in control — which is the same thing that happens today when a browser tab is
+closed, and is what makes handing a running observation to the next operator possible.
+
+A queued or running pointing file does not survive it, though. The file is this console's to
+deliver, row by row, and a console that has given up control cannot deliver it, so releasing
+or logging out cancels it. Cancelling it that way deliberately does not hold the dish, unlike
+the Cancel button in the utilities tab: whether the dish keeps moving is the question you were
+just asked, and cancelling the file should not answer it for you.
 
 ## Themes
 
@@ -174,8 +239,35 @@ the horizon — which is conveniently also where the map's outer range ring alre
 guide circles mark elevation 30° and 60°, the path carries clock ticks and rise/set marks, and
 the target's position now is a filled marker, with a caret on the degree ring at its azimuth
 and a line at the top right reading its az/el and set time, or when it next rises and how high
-it will get. Because azimuth is shared, the dish's own needle lines up with the track
-directly: when the needle points at the marker, the beam is on the target.
+it will get.
+
+The dish's own needles are drawn in that same plot, so they can be compared with the track
+directly. A needle carries azimuth as its direction and elevation as its length, reaching the
+radius the sky plot puts that elevation at — full to the rim on the horizon, shrinking to
+nothing overhead — which means the needle's **tip** is where the beam is pointing, not merely
+its bearing. When the tip sits on the target's marker, the dish is on the target, in both
+axes at once. The dashed elevation circles are therefore drawn whether or not a target is
+focused, since they are the scale that gives a needle's length its meaning; near the zenith
+the needle grows too short to carry an arrowhead, and the marker at the centre carries the
+reading instead.
+
+The green beam wedge opens from the dish out to the patch of sky the beam actually covers, so
+what it widens to is a footprint rather than a fixed spread of azimuth carried to the rim.
+`dish.beamwidth_deg` is a cone across the sky, and a cone is a circle on the sky; in this
+projection that circle becomes an ellipse. Radius is zenith angle, so the mark keeps its true
+angular size *radially* wherever it sits. Across the radius it does not: the same beam covers
+`2ρ/cos(el)` of azimuth — 2ρ down at the horizon, the whole compass at the zenith — while the
+arc it is drawn on shrinks to nothing over that same journey. What survives of the two is a
+tangential stretch of `z/sin z`, exactly 1 overhead and π/2 at the horizon. So the mark is
+round in the middle of the chart and is drawn out along the rim into an arc as the dish comes
+down. Point near enough to the zenith and the centre of the chart falls inside the mark, at
+which point the wedge is the mark.
+
+The footprint is drawn over the wedge as well as at the end of it, which is why it reads as a
+denser patch. The wedge's sides are tangents to the mark and touch it at its widest — about
+its middle — so a wedge drawn alone absorbs the near half of the footprint, and what is left
+looking like the beam is the far cap, half the width the beam really is. Drawn twice, the
+whole of it can be measured against the elevation circles.
 
 On the **star chart** the same samples are drawn in VirtualSky's projection, using its own
 `azel2xy`, repainted with every redraw. Note that the two views mirror each other, and both
@@ -205,10 +297,20 @@ means recomputing the target's az/el for each sample, since it moves; for a goto
 commanded position; and before anything has been commanded there is no error, so the plot is
 empty rather than showing zero.
 
+It is recorded only while this console holds control, and the commanded position with it —
+on the position plot, and as the dashed needle and elevation mark on the map. What both are measured against is where *this* console last told the
+dish to point, so with another operator driving — or nobody — they describe a command the dish
+was never given, and the difference from it is not a pointing error but the distance between
+two unrelated positions. Those stretches are recorded as nothing at all, and nothing is drawn
+across them: the trace breaks where the readings stop and picks up where they resume, rather
+than running a straight line over the interval to suggest a measurement that was never taken.
+
 `diagnostics.error_limit_deg` in `config.toml` fixes the error axis, deliberately tight —
 a converged track sits a few hundredths of a degree off, which an axis wide enough to hold a
-slew would flatten to nothing. Samples beyond the bound are marked at the edge of the plot
-rather than drawn as though they sat on it, so a slew reads as off-scale. `dish.az_range` and
+slew would flatten to nothing. Samples beyond the bound are simply not drawn, so the trace
+breaks and a slew reads as off the scale rather than as a bar along the edge of it — a value
+clamped to the bound is a reading the dish never took, in the very place the eye goes to
+judge whether the error is small. `dish.az_range` and
 `dish.el_range` fix the position axis over the rotor's travel; voltage and current scale
 themselves.
 

@@ -1,4 +1,5 @@
-// Parsing and formatting of angles for the coordinate entry fields and readouts.
+// Parsing and formatting of angles for the coordinate entry fields and readouts, and of
+// elapsed time for the places that report when something last happened.
 
 // Parse an angle entered by the operator, returning degrees or null if unparseable.
 //
@@ -75,6 +76,23 @@ export function fixedNumber(value, { digits = 3, decimals = 2, sign = "space" } 
         return body;
     }
     return (rounded < 0 ? "-" : sign === "always" ? "+" : " ") + body;
+}
+
+// How long ago a moment was, in the coarsest unit that still says something useful. The
+// server's timestamps are unix seconds, and null where the thing has not happened at all
+// since the server was last started.
+export function ago(timestamp) {
+    if (!timestamp) {
+        return "—";
+    }
+    const seconds = Math.max(0, Math.round(Date.now() / 1000 - timestamp));
+    if (seconds < 90) {
+        return `${seconds} s ago`;
+    }
+    if (seconds < 5400) {
+        return `${Math.round(seconds / 60)} min ago`;
+    }
+    return `${Math.round(seconds / 3600)} h ago`;
 }
 
 export function degToHMS(degrees) {

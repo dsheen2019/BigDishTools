@@ -76,8 +76,13 @@ export class Schedule {
         }
     }
 
-    cancel({ quiet = false } = {}) {
-        if (this.state === "running") {
+    // Cancelling a running file holds the dish where it is, which is what the operator means
+    // by it. hold: false cancels without commanding anything, for the callers that must not:
+    // one giving up control, where whether the dish keeps moving is a question the operator
+    // has just been asked and answered, and one that has already lost control, where the
+    // command would only bounce.
+    cancel({ quiet = false, hold = true } = {}) {
+        if (hold && this.state === "running") {
             this.hold?.();
         }
         this.stop("cancelled", quiet ? "" : "Cancelled.");

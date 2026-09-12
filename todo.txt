@@ -1,0 +1,175 @@
+Console session management -- deferred work
+===========================================
+
+Phase 0 (two-stage login, take/release control from the header, log out and back
+in) is done in bigdish_console. It works against an unmodified control server by
+releasing control the only way an unmodified server allows: dropping the
+websocket and immediately reconnecting as a viewer.
+
+What follows are the changes that would remove the cost of that, and they live in
+the w1xm/BigDishControlServer repository, not this one. Every item is additive:
+no existing field changes meaning and no existing behaviour changes, so clients
+that have not been updated -- the Python client, the older
+web_client/big-dish-web-client-vue, and any script in the wild -- keep working
+untouched.
+
+Line numbers are as of BigDishControlServer 2e31d9b.
+
+
+PHASE 1 -- additive server changes
+----------------------------------
+
+S1. "release" message: give control back without dropping the connection.
+
+    The protocol has no way out of INITIALIZED. States go CONNECTED ->
+    AUTHENTICATED -> INITIALIZED, and client_manager.py only ever moves a
+    connection back down in two places: another client's init with kick_others
+    (line 114), and remove_client() on disconnect (line 55).
+
+    Add, beside the "init" branch in ClientManager.process_message:
+
+        elif message["type"] == "release":
+            if client.state == "INITIALIZED":
+                client.state = "AUTHENTICATED"
+                print(f"Client {websocket.id} released control at {time.time()}.")
+                await websocket.send(json.dumps({"type": "release",
+                    "id": message_id, "success": True}))
+            else:
+                await websocket.send(json.dumps({"type": "release",
+                    "id": message_id, "success": False,
+                    "reason": "release is only available to clients in the "
+                              "INITIALIZED state."}))
+
+    Also needs:
+      - a mapping entry carrying only "id" in
+        server/bigdish_server/schemas/protocol_schema_requests_v0.1.0.json.
+        A new key under a jtd discriminator does not affect validation of any
+        other message type.
+      - a section in protocol.md under Initialization.
+      - a release() method on dish_client/bigdish_client.js and
+        dish_client/bigdish_client.py (this repo).
+
+    Decision to settle: does release erase the pending movement queue? init does
+    (erase_queue(), line 116); remove_client deliberately does not, and the
+    comment at line 56 says why. Recommend matching remove_client and NOT
+    erasing, so release behaves exactly as closing the browser tab does today and
+    a long track can run to completion across a hand-off. The console then offers
+    "stop the dish first" as a checkbox when releasing, which leaves the choice
+    with the operator instead of baking it into the protocol. Same reasoning for
+    the calibration offsets: init calls set_offsets, release should leave them
+    alone.
+
+    What this buys the console: releasing becomes one message on a socket that
+    never drops. No reconnect blip, no gap in the position log or the diagnostics
+    traces, no running pointing file killed, and -- the good one -- no need to
+    hold the operator's password in memory for the whole session, which Phase 0
+    has to do in order to re-authenticate after the reconnect.
+
+
+S2. Identify the caller in get_active_users.
+
+    Add "you": other_client is client to each entry built at
+    client_manager.py:142, and optionally a stable "connection_id".
+
+    The list is currently keyed by account, so when several people are logged in
+    under one shared account -- likely at a club station, everyone as "w1xm" --
+    a client cannot tell which INITIALIZED entry is itself. That is the whole
+    difficulty in noticing you have been kicked, since a kick sends nothing and
+    just flips other_client.state (line 114).
+
+    With "you", kick detection becomes exact by polling alone: find your own
+    entry, and if its state is no longer INITIALIZED you were kicked. It also
+    lets the UI correctly say "you have control" rather than "w1xm has control".
+
+    Adding a field to a response is invisible to every existing client: all three
+    read fields by name.
+
+    Phase 0 gets the same answer by inference, in ownEntry() in App.vue, and the
+    field would make it a fact. The inference: every request stamps the sender's
+    last_command_time before the reply to it is built (top of process_message),
+    so the newest last_active in a get_active_users answer belongs to whoever
+    asked. Reading our own state off that entry catches a kick by anyone, on any
+    account, within one poll -- verified on 2026-09-09 with three connections
+    sharing one account.
+
+    Two things still argue for the explicit field:
+
+      - it is an inference. Two connections that sent a command in the same
+        microsecond would tie, and the loser misreads one poll. Harmless at a
+        two-second cadence, but it is luck rather than design.
+      - it costs a get_active_users round trip to learn something the server
+        already knows about the connection it is answering.
+
+    Independently of both, resyncFromRefusal in App.vue treats the answer to a
+    refused command or init as the authority on which state we are really in, so
+    a drifted console corrects itself as soon as anything is asked of the server.
+
+
+S2a. While in get_active_users, consider "readonly" too.
+
+    The console cannot know an account is view-only until it has tried to init
+    and been told "Only clients not marked readonly in config can init." So it
+    offers a Take control button to accounts that can never have it, and the
+    refusal arrives as an error after the click. Reporting readonly on the auth
+    response (or in the user list) would let the button say so up front.
+
+
+S3. Advertise the protocol version and capabilities on auth.
+
+    Add "protocol_version": SCHEMA_VERSION and "capabilities": ["release", ...]
+    to the auth success response at client_manager.py:101.
+
+    This is how the console decides between the native release of S1 and the
+    Phase 0 reconnect fallback. Do NOT feature-detect by sending "release" and
+    seeing what comes back: an unknown type fails jtd validation at line 87,
+    which happens BEFORE message_id is assigned at line 95, so the error response
+    carries "id": -1, matches no pending request, and the JS client sits out its
+    full 10 s timeout.
+
+    Separately, and worth fixing while in there: the auth handler does not check
+    the incoming "version" field at all, despite protocol.md line 39 saying the
+    server rejects clients whose major version differs. Right now the field is
+    decorative.
+
+
+PHASE 2 -- optional: push notification on kick
+----------------------------------------------
+
+Only worth doing if the up-to-2-seconds latency of the S2 poll actually bothers
+someone. S2 already makes detection exact, just not instant.
+
+Server sends an unsolicited message to a client whose control it has just
+revoked. Requires a change in dish_client/bigdish_client.js as well: lines 48-53
+drop any message whose id does not match a pending request, so unsolicited
+messages currently go in the bin. Route those to an onnotify callback instead.
+
+  *** The constraint that makes this non-breaking: the push MUST carry an "id"
+      key. ***
+
+bigdish_client.py's receive thread does
+
+    self.received_messages[message_decoded["id"]] = message_decoded
+
+at line 68, inside a for loop wrapped in "except Exception as e" that treats any
+exception as the connection ending. A message with no "id" raises KeyError, the
+thread sets _connection_closed, and every subsequent request on that client
+raises ConnectionError even though the socket is perfectly healthy -- silently
+breaking every long-running Python script that happens to be connected when
+somebody gets kicked.
+
+Send "id": -1. Request ids start at 0 and only increase, so it can never collide
+with a real response; the Python client parks it in a dict slot nothing ever
+reads, and the old Vue client's "decoded.id === id" comparison never matches it.
+
+
+Testing any of the above
+------------------------
+
+server/bigdish_server/radome_manager_simulated.py means none of this needs the
+dish. Two browser tabs on different accounts: take control in one, watch the
+other; kick; confirm the kicked tab notices and greys out its controls; release;
+confirm the other tab can then take control without kicking.
+
+And after any change under bigdish_console/src, rebuild and commit
+bigdish_console/dist/ -- it is committed so the console can be served by python
+alone on a machine with no node toolchain, and it goes stale silently.
