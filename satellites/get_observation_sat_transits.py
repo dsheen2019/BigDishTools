@@ -5,7 +5,6 @@
 
 Generate times/coordinates for satellite intercepts near target RA/DEC observation location
 
-Currently just for starlink
 
 Use IAU-CPS satchecker query, fall back to a local coarse calculation using celestrak if that fails
 
