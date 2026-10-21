@@ -215,7 +215,7 @@ def _sc_get(session, url, params=None, timeout=(3.0, 15.0)):
 
 
 def query_satchecker(coord, t_start, duration_s, radius_deg, location,
-                     constellation=None, connect_timeout=3.0, read_timeout=15.0,
+                     constellation=None, connect_timeout=3.0, read_timeout=30.0,
                      total_timeout=60.0, poll_interval=1.0, session=None):
     s = session or requests.Session()
     icrs = coord.icrs
@@ -599,7 +599,7 @@ class SatelliteInterceptGenerator(object):
 
     # -- precise refinement -------------------------------------------------
 
-    def refine_with_operator_ephemeris(self, transits, pad_s=30.0, step_s=0.1):
+    def refine_with_operator_ephemeris(self, transits, pad_s=30.0, step_s=0.01):
         """For satellites with a SpaceX-provided ephemeris, recompute the track
         through the FOV from it. Others (and any we can't cover) keep the coarse
         result.
@@ -717,8 +717,8 @@ class SatelliteInterceptGenerator(object):
         "utc_time":      ("UTC (closest approach)", 23, False),
         "name":          ("Name",                   20, False),
         "norad_id":      ("NORAD",                   6, True),
-        "ra_j2000_deg":  ("RA J2000",               10, True),
-        "dec_j2000_deg": ("Dec J2000",              10, True),
+        "ra_j2000_deg":  ("RA J2000",               13, True),
+        "dec_j2000_deg": ("Dec J2000",              13, True),
         "sep_deg":       ("Sep",                     7, True),
         "alt_deg":       ("El",                      7, True),
         "az_deg":        ("Az",                      7, True),
@@ -748,12 +748,18 @@ class SatelliteInterceptGenerator(object):
         rows = []
         for t in transits:
             p = t.closest
+            if self.opt.hms:
+                ra = self.ra_to_hms(p['ra'])
+                dec = self.dec_to_dms(p['dec'])
+            else:
+                ra = f"{p['ra']:.5f}"
+                dec = f"{p['dec']:.5f}"
             rows.append({
                 "utc_time": Time(p["julian_date"], format="jd", scale="utc").isot,
                 "name": t.name,
                 "norad_id": t.norad_id,
-                "ra_j2000_deg": f"{p['ra']:.5f}",
-                "dec_j2000_deg": f"{p['dec']:.5f}",
+                "ra_j2000_deg": ra,
+                "dec_j2000_deg": dec,
                 "sep_deg": f"{t.min_sep_deg:.4f}",
                 "alt_deg": f"{p['altitude']:.3f}" if "altitude" in p else "",
                 "az_deg": f"{p['azimuth']:.3f}" if "azimuth" in p else "",
@@ -774,6 +780,22 @@ class SatelliteInterceptGenerator(object):
         self.print_table(rows, fields)
         log.info("%d transits written to %s", len(rows), fname)
         return transits
+
+    def ra_to_hms(self, ra):
+
+        hours = int(ra/15)
+        mins = int((ra/15 - hours)*60)
+        secs = ((ra/15 - hours)*60 - mins)*60
+
+        return f"{hours}:{mins}:{secs:.4f}"
+
+    def dec_to_dms(self, dec):
+
+        degs = int(dec)
+        mins = int((dec - degs)*60)
+        secs = ((dec - degs)*60 - mins)*60
+
+        return f"{degs}:{mins}:{secs:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +939,14 @@ def parse_command_line():
         type=str,
         default=None,
         help="""Where should I put output files? (default: cwd)""",
+    )
+    parser.add_argument(
+        "-hms",
+        "--oldunits",
+        dest="hms",
+        action="store_true",
+        default=False,
+        help="""return in h:m:s and d:m:s instead of decimal""",
     )
     parser.add_argument(
         "-v",
