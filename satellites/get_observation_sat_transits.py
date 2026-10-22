@@ -30,6 +30,17 @@ INPUTS:
         antenna to compute from (key into `antennas`)
     out_dir:
         folder to save outputs to. defaults to current working directory
+    catalog:
+        optional, path to a saved celestrak CSV to propagate instead of downloading one.
+        celestrak only serves *current* elements and only lets you fetch every couple of
+        hours, so a past observation needs the catalogue you saved at the time. The local
+        fallback is only as good as the elements it is given -- propagating a TLE weeks
+        past its epoch is meaningless and it warns when you do.
+    local:
+        optional, skip satchecker and go straight to the local calculation
+    coarse_step / fine_step:
+        optional, time resolution in seconds of the all-sky search (default 1.0) and of
+        the per-candidate refinement (default 0.1)
 
 RETURNS:
     comma separated list of:
@@ -71,6 +82,8 @@ from sgp4 import omm
 from sgp4.api import Satrec
 from skyfield.api import load, wgs84, EarthSatellite
 
+from satellite_import_tools import Satellite_Trajectory_Calculator
+
 
 
 log = logging.getLogger(__name__)
@@ -88,6 +101,19 @@ EPOCH_RE = re.compile(r"^\d{13}(\.\d+)?$")
 # starlink Header lines are "key:value", sometimes several to a line. A key is a lower-case
 # word against a colon, which is what keeps the colons in "17:57:20" out of it.
 HEADER_RE = re.compile(r"(?:^|\s)([a-z_]+):(.*?)(?=\s[a-z_]+:|$)")
+
+# Fastest a satellite crosses the sky, deg/s. A circular orbit at 300 km does ~1.25 deg/s
+# overhead; 1.5 is a comfortable bound for anything we'd care about. Used to widen the
+# coarse search cone so a sampled grid can't step straight over a small FOV.
+MAX_SKY_RATE_DEG_S = 1.5
+
+# A TLE propagated this far from its epoch is not worth reporting. SGP4 doesn't complain,
+# it just quietly produces nonsense -- a year-stale starlink element puts the satellite
+# 6.5e12 km away with a perfectly plausible-looking az/el.
+STALE_TLE_WARN_DAYS = 7.0
+
+# Anything beyond this range (km) came out of a broken propagation, not an orbit.
+MAX_PLAUSIBLE_RANGE_KM = 1.0e6
 
 
 antennas = {
@@ -199,6 +225,10 @@ class SatCheckerRequestError(Exception):
     """4xx: our request is wrong. Don't silently fall back on this."""
 
 
+class NoCatalog(Exception):
+    """Nothing to propagate: celestrak wouldn't answer and no saved copy was found."""
+
+
 def _sc_get(session, url, params=None, timeout=(3.0, 15.0)):
     r = session.get(url, params=params, timeout=timeout,
                     headers={"accept": "application/json"})
@@ -215,8 +245,8 @@ def _sc_get(session, url, params=None, timeout=(3.0, 15.0)):
 
 
 def query_satchecker(coord, t_start, duration_s, radius_deg, location,
-                     constellation=None, connect_timeout=3.0, read_timeout=30.0,
-                     total_timeout=60.0, poll_interval=1.0, session=None):
+                     constellation=None, connect_timeout=3.0, read_timeout=120.0,
+                     total_timeout=120.0, poll_interval=1.0, session=None):
     s = session or requests.Session()
     icrs = coord.icrs
     params = {
@@ -447,10 +477,134 @@ def eme2000_track(pos_km: np.ndarray, t: Time, location: EarthLocation):
     aa_frame = AltAz(obstime=t, location=location)
     altaz = itrs_topo.transform_to(aa_frame)
 
-    # direction only -> treated as a source at infinity -> catalogue-equivalent RA/Dec
-    icrs = SkyCoord(az=altaz.az, alt=altaz.alt, frame=aa_frame).icrs
+    icrs = altaz_to_icrs(altaz.az, altaz.alt, t, location)
     return altaz, icrs
 
+
+def altaz_to_icrs(az, alt, t, location):
+    """
+    Apparent az/el -> the "J2000-equivalent" ICRS direction, i.e. the catalogue
+    position a star would need to have to appear exactly where the satellite does.
+
+    Dropping the distance makes astropy treat it as a source at infinity, which puts
+    back the annual + diurnal aberration a real target gets, so separations against a
+    catalogue position are honest. Both the operator-ephemeris path and the local
+    propagation fallback go through here, so "RA/Dec" means the same thing in both.
+
+    az, alt may be Angle/Quantity or plain degrees.
+    """
+    if not isinstance(az, u.Quantity):
+        az = np.asarray(az) * u.deg
+    if not isinstance(alt, u.Quantity):
+        alt = np.asarray(alt) * u.deg
+    return SkyCoord(az=az, alt=alt, frame=AltAz(obstime=t, location=location)).icrs
+
+
+def angular_separation_deg(az1_deg, el1_deg, az2_deg, el2_deg):
+    """Angular separation (deg) between two az/el directions."""
+    az1 = np.radians(az1_deg)
+    el1 = np.radians(el1_deg)
+    az2 = np.radians(az2_deg)
+    el2 = np.radians(el2_deg)
+    cos_sep = (
+        np.sin(el1) * np.sin(el2)
+        + np.cos(el1) * np.cos(el2) * np.cos(az1 - az2)
+    )
+    return np.degrees(np.arccos(np.clip(cos_sep, -1.0, 1.0)))
+
+
+def contiguous_spans(mask, join=0):
+    """(first, last) index pairs for each run of True in `mask`.
+
+    Runs separated by `join` or fewer False samples are merged, which is how the fine
+    pass avoids resampling the same seconds twice when two near approaches sit close
+    enough together that their padding overlaps.
+    """
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return []
+    breaks = np.flatnonzero(np.diff(idx) > join + 1)
+    starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+    ends = np.concatenate((idx[breaks], [idx[-1]]))
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
+def find_nearby_satellites(SatCalc, all_sats, coarse_ts, beam_az, beam_el,
+                           antenna_coords, search_radius_deg):
+    """
+    Coarse-pass filter: which satellites come within ``search_radius_deg`` of the beam.
+
+    One satellite at a time, reducing each track to a separation and throwing the track
+    away -- the whole active catalogue is ~13k satellites and holding every az/el/range
+    array at once costs hundreds of MB for no gain (the propagation itself is only a few
+    seconds).
+
+    Unlike the version in sat_rfi/process_observation.py this takes the beam track as
+    plain arrays rather than a pointing log, because here the beam is a fixed RA/Dec
+    converted to az/el rather than something the telescope logged.
+
+    Parameters
+    ----------
+    SatCalc : Satellite_Trajectory_Calculator
+    all_sats : dict
+        TLE dictionary from ``create_sat_data_dictionary_from_csv``.
+    coarse_ts :
+        skyfield time array to evaluate on.
+    beam_az, beam_el : np.ndarray
+        Beam az/el in degrees, same length as ``coarse_ts``.
+    antenna_coords :
+        wgs84 object from ``SatCalc.instantiate_antenna_coords``.
+    search_radius_deg : float
+        Cone half-angle. Pass the *inflated* radius; the caller trims back to the real
+        FOV in the fine pass.
+
+    Returns
+    -------
+    dict
+        ``{name: (record, in_cone_mask)}`` for satellites that enter the cone.
+        ``in_cone_mask`` indexes ``coarse_ts`` and tells the fine pass which stretches
+        of the window are worth resampling.
+    """
+    nearby = {}
+    n_failed = 0
+    n_absurd = 0
+
+    for name, record in all_sats.items():
+        try:
+            azels, _, ranges, _ = SatCalc.get_satellite_track(
+                coarse_ts, record, antenna_coords)
+        except Exception:
+            n_failed += 1          # decayed element, bad epoch, sgp4 blew up
+            continue
+
+        sat_az = np.asarray(azels)[:, 0]
+        sat_el = np.asarray(azels)[:, 1]
+
+        # SGP4 does not always flag a propagation that has gone off the rails, so check
+        # the answer rather than trusting an error code.
+        if not np.all(np.isfinite(sat_az)) or not np.all(np.isfinite(sat_el)):
+            n_absurd += 1
+            continue
+        if np.nanmax(np.asarray(ranges)) / 1e3 > MAX_PLAUSIBLE_RANGE_KM:
+            n_absurd += 1
+            continue
+
+        above = sat_el > 0.0
+        if not above.any():
+            continue
+
+        sep = np.full(sat_el.shape, np.inf)
+        sep[above] = angular_separation_deg(
+            beam_az[above], beam_el[above], sat_az[above], sat_el[above]
+        )
+        in_cone = sep <= search_radius_deg
+        if in_cone.any():
+            nearby[name] = (record, in_cone)
+
+    if n_failed or n_absurd:
+        log.debug("coarse pass: %d satellites failed to propagate, %d gave implausible "
+                  "positions", n_failed, n_absurd)
+    return nearby
 
 
 
@@ -491,6 +645,10 @@ class SatelliteInterceptGenerator(object):
     # -- coarse search ------------------------------------------------------
 
     def find_transits(self):
+        if getattr(self.opt, "local", False):
+            log.info("--local given; skipping SatChecker")
+            return self.filter_constellations(self.local_fov_transits())
+
         # SatChecker only takes one constellation; pass it server-side when we
         # can, otherwise ask for everything and filter by name afterwards.
         sc_const = self.constellations[0] if len(self.constellations) == 1 else None
@@ -507,7 +665,16 @@ class SatelliteInterceptGenerator(object):
     # --
 
     def load_satellites(self):
-        # load satellites from Celestrak if satchecker fails 
+        # load satellites from Celestrak if satchecker fails
+
+        # An explicitly supplied catalogue wins: celestrak only serves *current*
+        # elements, so a past observation can only be done from the file saved at
+        # the time.
+        if getattr(self.opt, "catalog", None):
+            if not os.path.exists(self.opt.catalog):
+                raise NoCatalog(f"no such catalog file: {self.opt.catalog}")
+            log.info("using supplied catalog %s", self.opt.catalog)
+            return self.opt.catalog
 
         request_time = datetime.fromtimestamp(time.time(), tz=timezone.utc)
 
@@ -517,79 +684,189 @@ class SatelliteInterceptGenerator(object):
 
         try:
             with urllib.request.urlopen(CELESTRAK_URL, timeout=30) as resp:
-                sats_file.write_bytes(resp.read())
+                body = resp.read()
+            # celestrak answers a too-soon repeat request with "GP data has not updated
+            # since your last successful download..." -- usually a 403 (an OSError, caught
+            # below), but cheap enough to check the body really is the catalogue.
+            if not body.startswith(b"OBJECT_NAME,"):
+                raise OSError(f"celestrak returned {body[:120].decode(errors='replace')!r}")
+            sats_file.write_bytes(body)
             log.info("loaded satellites from celestrak")
         except OSError as e:
             # timestamped names sort chronologically -> newest is last
             saved = sorted(Path(self.out_dir).glob("celestrak_satellites_ephemeris_*.csv"))
             if not saved:
-                raise RuntimeError(f"celestrak unreachable ({e}) and no saved copy") from e
+                raise NoCatalog(
+                    f"celestrak would not serve the catalogue ({e}), there is no saved "
+                    f"copy in {self.out_dir}, and no --catalog was given. Celestrak "
+                    f"allows one download per group every two hours; pass --catalog with "
+                    f"a CSV saved earlier (celestrak or space-track format both work)."
+                ) from e
             sats_file = saved[-1]
             log.warning("failed to access celestrak (%s); using %s", e, sats_file)
 
         return str(sats_file)   # full path
 
-    def create_sat_data_dictionary_from_csv(self, csv_path):
-        """
-        take a path to a csv of sat ephemeris and produce a dictionary with earthsatellite objects and their original defining data
-        """
+    def local_fov_transits(self):
+        """Local TLE propagation, for when SatChecker is unavailable.
 
-        self.ts = load.timescale()
+        Builds the same {key: {"name", "norad_id", "positions": [{"julian_date", "ra",
+        "dec", "angle", "altitude", "azimuth", ...}]}} shape SatChecker returns and hands
+        it to transits_from_positions(), so everything downstream -- the Starlink
+        refinement included -- can't tell the two apart except by `source`.
+
+        Two passes: a cheap all-sky sweep in topocentric az/el over the whole catalogue
+        (az/el because it needs no frame transforms), then a fine resampling in RA/Dec of
+        only the handful of satellites that came close.
+        """
+        coarse_step = float(getattr(self.opt, "coarse_step", 1.0))
+        fine_step = float(getattr(self.opt, "fine_step", 0.1))
+
+        sats_file = self.load_satellites()
+        SatCalc = Satellite_Trajectory_Calculator(self.out_dir)
+        all_sats = SatCalc.create_sat_data_dictionary_from_csv(sats_file)
+        log.info("loaded %d satellites from %s", len(all_sats), sats_file)
+
+        # Matching names before propagating rather than afterwards in
+        # filter_constellations() saves most of the work when you only want one
+        # constellation.
+        if self.constellations:
+            all_sats = {n: r for n, r in all_sats.items()
+                        if any(k in n.lower() for k in self.constellations)}
+            log.info("%d satellites match %s", len(all_sats),
+                     ",".join(self.constellations))
+        if not all_sats:
+            log.warning("no satellites to propagate")
+            return []
+
+        self.warn_if_stale(all_sats)
+
+        c = self.antenna["coords_wgs84"]
+        antenna_coords = SatCalc.instantiate_antenna_coords(c["lat"], c["lon"], c["el"])
+
+        # Coarse grid over the observation, end inclusive.
+        coarse_unix = np.arange(self.t_start.unix,
+                                self.t_end.unix + coarse_step, coarse_step)
+        coarse_unix = coarse_unix[coarse_unix <= self.t_end.unix + 1e-6]
+        coarse_ts = SatCalc.ts.from_datetimes(
+            [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in coarse_unix])
+
+        # Where the target sits in the sky, so the sweep can stay in az/el.
+        beam = self.target_icrs.transform_to(AltAz(
+            obstime=Time(coarse_unix, format="unix", scale="utc"),
+            location=self.location))
+        beam_az, beam_el = beam.az.deg, beam.alt.deg
+
+        # A fast satellite can cross a small FOV entirely between two coarse samples, so
+        # cast a wider net here and let the fine pass cut it back to the real radius.
+        cone = self.radius + MAX_SKY_RATE_DEG_S * coarse_step
+        log.info("coarse pass: %d satellites, %d steps of %g s, %.2f deg cone",
+                 len(all_sats), len(coarse_unix), coarse_step, cone)
+
+        nearby = find_nearby_satellites(SatCalc, all_sats, coarse_ts, beam_az, beam_el,
+                                        antenna_coords, cone)
+        log.info("coarse pass: %d candidate satellite(s) within %.2f deg", len(nearby), cone)
 
         sats = {}
-        with open(csv_path, 'r') as f:
-            for fields in omm.parse_csv(f):
-                sat = Satrec()
-                omm.initialize(sat, fields)
-                e = EarthSatellite.from_satrec(sat, self.ts)
-                e.name = fields.get('OBJECT_NAME')
+        for name, (record, in_cone) in nearby.items():
+            positions = self.refine_local_candidate(
+                SatCalc, record, antenna_coords, coarse_unix, in_cone,
+                coarse_step, fine_step)
+            if not positions:
+                log.debug("%s: inside the coarse cone but not the %.3f deg FOV",
+                          name, self.radius)
+                continue
+            try:
+                norad = int(record[0][1]["NORAD_CAT_ID"])
+            except (KeyError, TypeError, ValueError):
+                log.warning("%s: no NORAD id in the catalogue; skipping", name)
+                continue
+            sats[norad] = {"name": name, "norad_id": norad, "positions": positions}
 
-                dict_data = {
-                    "OBJECT_NAME" :         fields.get('OBJECT_NAME'),
-                    "OBJECT_ID" :           fields.get('OBJECT_ID'),
-                    "EPOCH" :               fields.get('EPOCH'),
-                    "MEAN_MOTION" :         fields.get('MEAN_MOTION'),
-                    "ECCENTRICITY" :        fields.get('ECCENTRICITY'),
-                    "INCLINATION" :         fields.get('INCLINATION'),
-                    "RA_OF_ASC_NODE":       fields.get('RA_OF_ASC_NODE'),
-                    "ARG_OF_PERICENTER":    fields.get('ARG_OF_PERICENTER'),
-                    "MEAN_ANOMALY":         fields.get('MEAN_ANOMALY'),
-                    "EPHEMERIS_TYPE":       fields.get('EPHEMERIS_TYPE'),
-                    "CLASSIFICATION_TYPE":  fields.get('CLASSIFICATION_TYPE'),
-                    "NORAD_CAT_ID":         fields.get('NORAD_CAT_ID'),
-                    "ELEMENT_SET_NO":       fields.get('ELEMENT_SET_NO'),
-                    "REV_AT_EPOCH":         fields.get('REV_AT_EPOCH'),
-                    "BSTAR":                fields.get('BSTAR'),
-                    "MEAN_MOTION_DOT":      fields.get('MEAN_MOTION_DOT'),
-                    "MEAN_MOTION_DDOT" :    fields.get('MEAN_MOTION_DDOT'),
-                }
+        transits = transits_from_positions(
+            sats, gap_s=max(1.0, 5 * fine_step), source="local")
+        log.info("local propagation found %d transit(s)", len(transits))
+        return transits
 
-                try:
-                    sats[e.name].append([e,dict_data])
-                except:
-                    sats[e.name] = [[e,dict_data]]
+    def refine_local_candidate(self, SatCalc, record, antenna_coords, coarse_unix,
+                               in_cone, coarse_step, fine_step, pad_s=2.0):
+        """Resample one coarse candidate and keep the samples actually inside the FOV.
 
-        return sats
-
-    def local_fov_transits(self):
-        """Coarse local calculation from celestrak TLE/OMM.
-
-        TODO: drop in existing code. Simplest is to build the same
-        {key: {"name", "norad_id", "positions": [{"julian_date", "ra", "dec",
-        "angle", "altitude", "azimuth", ...}]}} dict SatChecker returns and hand
-        it to transits_from_positions(sats, source="local").
-        Available: self.target, self.t_start, self.duration_s, self.radius,
-        self.location, self.constellations.
+        Only the stretches where the coarse pass put the satellite inside the (inflated)
+        cone get resampled, padded either side so the fine pass can't clip an entry or
+        exit the coarse grid straddled.
         """
+        # Spans whose padding would overlap are merged, so the fine grid has no repeats.
+        join = int(np.ceil(2 * pad_s / coarse_step))
+        grids = []
+        for lo, hi in contiguous_spans(in_cone, join=join):
+            t0 = max(coarse_unix[lo] - pad_s, self.t_start.unix)
+            t1 = min(coarse_unix[hi] + pad_s, self.t_end.unix)
+            n = int(np.floor((t1 - t0) / fine_step)) + 1
+            grids.append(t0 + np.arange(n) * fine_step)
+        if not grids:
+            return []
+        fine_unix = np.concatenate(grids)
 
-        # still need to add the multithreaded sat propagation for the coarse search and associated logic to get agle of arc from old scripts
-        raise NotImplementedError("local fallback not wired in yet")
+        fine_ts = SatCalc.ts.from_datetimes(
+            [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in fine_unix])
+        try:
+            azels, _, ranges, _ = SatCalc.get_satellite_track(
+                fine_ts, record, antenna_coords)
+        except Exception as e:
+            log.debug("fine pass failed (%s)", e)
+            return []
 
-        #load from celestrak
-        sats_file = self.load_satellites()
-        sats = self.create_sat_data_dictionary_from_csv(sats_file)
-        
-        
+        az = np.asarray(azels)[:, 0]
+        el = np.asarray(azels)[:, 1]
+        times = Time(fine_unix, format="unix", scale="utc")
+        icrs = altaz_to_icrs(az, el, times, self.location)
+        sep = self.target_icrs.separation(icrs).deg
+
+        inside = np.flatnonzero((sep <= self.radius) & (el > 0.0))
+        if inside.size == 0:
+            return []
+
+        jd = times.jd
+        ra, dec = icrs.ra.deg, icrs.dec.deg
+        rng_km = np.asarray(ranges) / 1e3
+        return [{
+            "julian_date": float(jd[i]),
+            "ra": float(ra[i]),
+            "dec": float(dec[i]),
+            "angle": float(sep[i]),
+            "azimuth": float(az[i]),
+            "altitude": float(el[i]),
+            "range_km": float(rng_km[i]),
+        } for i in inside]
+
+    def warn_if_stale(self, all_sats):
+        """TLEs propagated far from their epoch are worthless, and nothing says so.
+
+        SGP4 doesn't flag it -- a year-old starlink element happily reports a plausible
+        az/el at a range of 6.5e12 km. find_nearby_satellites() throws those out, but the
+        quieter case (elements a few weeks old, answers wrong by degrees) looks fine, so
+        say how old the catalogue is relative to the observation.
+        """
+        epochs = []
+        for record in all_sats.values():
+            try:
+                epochs.append(record[0][0].epoch.tt)
+            except Exception:
+                continue
+        if not epochs:
+            return
+        age_days = float(np.median(np.asarray(epochs))) - self.t_start.tt.jd
+        if abs(age_days) > STALE_TLE_WARN_DAYS:
+            log.warning(
+                "catalogue elements are a median %.1f days %s the observation -- SGP4 is "
+                "not meaningful that far from epoch. Pass --catalog with elements from "
+                "around %s.",
+                abs(age_days), "after" if age_days > 0 else "before",
+                self.t_start.isot)
+        else:
+            log.debug("catalogue elements are a median %.2f days from the observation",
+                      age_days)
 
     def filter_constellations(self, transits):
         if not self.constellations:
@@ -949,6 +1226,37 @@ def parse_command_line():
         help="""return in h:m:s and d:m:s instead of decimal""",
     )
     parser.add_argument(
+        "--catalog",
+        dest="catalog",
+        type=str,
+        default=None,
+        help="""saved celestrak CSV to propagate instead of downloading one. celestrak
+                only serves current elements and only lets you fetch every couple of
+                hours, so a past observation needs the catalogue saved at the time.""",
+    )
+    parser.add_argument(
+        "--local",
+        dest="local",
+        action="store_true",
+        default=False,
+        help="""skip satchecker and go straight to the local calculation""",
+    )
+    parser.add_argument(
+        "--coarse-step",
+        dest="coarse_step",
+        type=float,
+        default=1.0,
+        help="""time resolution in seconds of the local all-sky search (default 1.0)""",
+    )
+    parser.add_argument(
+        "--fine-step",
+        dest="fine_step",
+        type=float,
+        default=0.1,
+        help="""time resolution in seconds of the local per-candidate refinement
+                (default 0.1)""",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -977,4 +1285,10 @@ if __name__ == "__main__":
     )
 
     generator = SatelliteInterceptGenerator(options)
-    generator.generate_target_list()
+    try:
+        generator.generate_target_list()
+    except NoCatalog as e:
+        # Celestrak only serves one download per group every couple of hours, so this
+        # is a routine thing to hit rather than a crash worth a traceback.
+        log.error("%s", e)
+        sys.exit(1)
