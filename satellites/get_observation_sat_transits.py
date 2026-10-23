@@ -53,6 +53,7 @@ RETURNS:
 import argparse
 import csv
 import logging
+import multiprocessing as mp
 import os
 import re
 import sys
@@ -82,7 +83,11 @@ from sgp4 import omm
 from sgp4.api import Satrec
 from skyfield.api import load, wgs84, EarthSatellite
 
-from satellite_import_tools import Satellite_Trajectory_Calculator
+from satellite_import_tools import (
+    Satellite_Trajectory_Calculator,
+    calculate_dynamic_batches,
+    get_cpu_usage,
+)
 
 
 
@@ -529,15 +534,130 @@ def contiguous_spans(mask, join=0):
     return list(zip(starts.tolist(), ends.tolist()))
 
 
-def find_nearby_satellites(SatCalc, all_sats, coarse_ts, beam_az, beam_el,
-                           antenna_coords, search_radius_deg):
-    """
-    Coarse-pass filter: which satellites come within ``search_radius_deg`` of the beam.
+def merge_spans(spans, join=0):
+    """Merge (first, last) index pairs separated by `join` or fewer samples.
 
-    One satellite at a time, reducing each track to a separation and throwing the track
-    away -- the whole active catalogue is ~13k satellites and holding every az/el/range
-    array at once costs hundreds of MB for no gain (the propagation itself is only a few
-    seconds).
+    The fine pass pads either side of each span, so two near approaches close enough
+    together would otherwise have it resample the same seconds twice.
+    """
+    out = []
+    for lo, hi in sorted(spans):
+        if out and lo - out[-1][1] <= join + 1:
+            out[-1][1] = max(out[-1][1], hi)
+        else:
+            out.append([lo, hi])
+    return [(lo, hi) for lo, hi in out]
+
+
+def coarse_sweep_one(SatCalc, record, coarse_ts, beam_az, beam_el, antenna_coords,
+                     search_radius_deg):
+    """One satellite against the beam. Returns its in-cone spans, or None.
+
+    The whole point is to reduce the track to a handful of index pairs here and let the
+    array be freed -- the catalogue is ~19k satellites and an 8 hour window is ~29k time
+    steps, so keeping even one array per satellite is 4 GB we don't need.
+    """
+    try:
+        azels, _, ranges, _ = SatCalc.get_satellite_track(
+            coarse_ts, record, antenna_coords)
+    except Exception:
+        return "failed"                # decayed element, bad epoch, sgp4 blew up
+
+    azels = np.asarray(azels)
+    sat_az = azels[:, 0]
+    sat_el = azels[:, 1]
+
+    # SGP4 does not always flag a propagation that has gone off the rails, so check the
+    # answer rather than trusting an error code.
+    if not np.all(np.isfinite(sat_az)) or not np.all(np.isfinite(sat_el)):
+        return "absurd"
+    if np.nanmax(np.asarray(ranges)) / 1e3 > MAX_PLAUSIBLE_RANGE_KM:
+        return "absurd"
+
+    above = sat_el > 0.0
+    if not above.any():
+        return None
+
+    sep = np.full(sat_el.shape, np.inf)
+    sep[above] = angular_separation_deg(
+        beam_az[above], beam_el[above], sat_az[above], sat_el[above]
+    )
+    in_cone = sep <= search_radius_deg
+    if not in_cone.any():
+        return None
+    return contiguous_spans(in_cone)
+
+
+# Per-process state for the parallel coarse pass. Set once by _coarse_init() so the time
+# grid, the timescale and the beam track are built per worker rather than per batch.
+_COARSE = {}
+
+
+def _coarse_init(file_dir, coarse_unix, beam_az, beam_el, site, search_radius_deg):
+    global _COARSE
+    SatCalc = Satellite_Trajectory_Calculator(file_dir)
+    _COARSE = {
+        "SatCalc": SatCalc,
+        "coarse_ts": SatCalc.ts.from_datetimes(
+            [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in coarse_unix]),
+        "coords": SatCalc.instantiate_antenna_coords(*site),
+        "beam_az": beam_az,
+        "beam_el": beam_el,
+        "radius": search_radius_deg,
+    }
+
+
+def _coarse_batch(batch):
+    """Sweep a batch of satellites in a worker process.
+
+    `batch` is a list of (name, [omm_dict, ...]) -- the raw OMM fields rather than
+    skyfield objects, because that is what pickles cheaply. Same trick as
+    Satellite_Trajectory_Calculator.process_satellite_batch(): rebuild the satellite in
+    the process that will use it.
+
+    Returns (hits, n_failed, n_absurd) where hits is [(name, spans), ...] -- a few index
+    pairs per satellite, so almost nothing travels back over the pipe.
+    """
+    w = _COARSE
+    hits = []
+    n_failed = n_absurd = 0
+    for name, omm_fields in batch:
+        record = []
+        for fields in omm_fields:
+            try:
+                satrec = Satrec()
+                omm.initialize(satrec, fields)
+                sat = EarthSatellite.from_satrec(satrec, w["SatCalc"].ts)
+                sat.name = name
+                record.append([sat, fields])
+            except Exception:
+                continue
+        if not record:
+            n_failed += 1
+            continue
+
+        spans = coarse_sweep_one(w["SatCalc"], record, w["coarse_ts"], w["beam_az"],
+                                 w["beam_el"], w["coords"], w["radius"])
+        if spans == "failed":
+            n_failed += 1
+        elif spans == "absurd":
+            n_absurd += 1
+        elif spans:
+            hits.append((name, spans))
+    return hits, n_failed, n_absurd
+
+
+def find_nearby_satellites(SatCalc, all_sats, coarse_unix, coarse_ts, beam_az, beam_el,
+                           antenna_coords, search_radius_deg, file_dir, site,
+                           num_workers=None, label="coarse pass"):
+    """
+    Coarse-pass filter: which satellites come within ``search_radius_deg`` of the beam,
+    and over which stretches of the window.
+
+    Cost is (satellites x time steps), so it grows with the length of the observation:
+    ~19k satellites over 10 minutes at 1 s is a few seconds, over 8 hours it is tens of
+    minutes on one core. Hence the process pool. Each worker reduces its own satellites
+    to index spans and sends back only those, so nothing large is pickled or held.
 
     Unlike the version in sat_rfi/process_observation.py this takes the beam track as
     plain arrays rather than a pointing log, because here the beam is a fixed RA/Dec
@@ -546,66 +666,248 @@ def find_nearby_satellites(SatCalc, all_sats, coarse_ts, beam_az, beam_el,
     Parameters
     ----------
     SatCalc : Satellite_Trajectory_Calculator
+        Used for the serial path; workers build their own.
     all_sats : dict
         TLE dictionary from ``create_sat_data_dictionary_from_csv``.
+    coarse_unix : np.ndarray
+        Time grid as unix seconds (what the workers rebuild their timescale from).
     coarse_ts :
-        skyfield time array to evaluate on.
+        The same grid as skyfield times, for the serial path.
     beam_az, beam_el : np.ndarray
-        Beam az/el in degrees, same length as ``coarse_ts``.
+        Beam az/el in degrees, same length as the grid.
     antenna_coords :
         wgs84 object from ``SatCalc.instantiate_antenna_coords``.
     search_radius_deg : float
         Cone half-angle. Pass the *inflated* radius; the caller trims back to the real
         FOV in the fine pass.
+    file_dir, site :
+        Passed to the workers so they can rebuild SatCalc and the antenna position.
+    num_workers : int or None
+        None or 0 picks a default from the core count; 1 stays in this process.
 
     Returns
     -------
     dict
-        ``{name: (record, in_cone_mask)}`` for satellites that enter the cone.
-        ``in_cone_mask`` indexes ``coarse_ts`` and tells the fine pass which stretches
-        of the window are worth resampling.
+        ``{name: spans}`` for satellites that enter the cone, where spans is a list of
+        (first, last) indices into the coarse grid.
     """
+    if num_workers in (None, 0):
+        # satellite_import_tools sizes the pool from current CPU load, so a sweep
+        # launched on a busy machine backs off instead of fighting for cores.
+        num_workers, _ = calculate_dynamic_batches(
+            len(all_sats), get_cpu_usage(interval=0.5), min_workers=2)
+    num_workers = min(num_workers, max(1, len(all_sats)))
+
+    if num_workers == 1:
+        nearby = {}
+        n_failed = n_absurd = 0
+        for name, record in all_sats.items():
+            spans = coarse_sweep_one(SatCalc, record, coarse_ts, beam_az, beam_el,
+                                     antenna_coords, search_radius_deg)
+            if spans == "failed":
+                n_failed += 1
+            elif spans == "absurd":
+                n_absurd += 1
+            elif spans:
+                nearby[name] = spans
+        _log_coarse_rejects(n_failed, n_absurd)
+        return nearby
+
+    # Several batches per worker so a slow batch doesn't hold up the end of the pass,
+    # and interleaved rather than contiguous: catalogues are sorted by name, so whole
+    # Starlink shells sit together and a contiguous split hands one worker every
+    # satellite that happens to be up while another gets none.
+    names = list(all_sats)
+    n_batches = max(num_workers, min(len(names) // 200, num_workers * 8))
+    batches = [
+        [(n, [entry[1] for entry in all_sats[n]]) for n in names[i::n_batches]]
+        for i in range(n_batches)
+    ]
+    batches = [b for b in batches if b]
+
+    log.info("%s: %d workers, %d batches", label, num_workers, len(batches))
+
     nearby = {}
-    n_failed = 0
-    n_absurd = 0
+    n_failed = n_absurd = 0
+    done = 0
+    with mp.Pool(processes=num_workers, initializer=_coarse_init,
+                 initargs=(file_dir, coarse_unix, beam_az, beam_el, site,
+                           search_radius_deg)) as pool:
+        for hits, failed, absurd in pool.imap_unordered(_coarse_batch, batches):
+            nearby.update(dict(hits))
+            n_failed += failed
+            n_absurd += absurd
+            done += 1
+            log.debug("%s: %d/%d batches, %d candidates so far",
+                      label, done, len(batches), len(nearby))
 
-    for name, record in all_sats.items():
-        try:
-            azels, _, ranges, _ = SatCalc.get_satellite_track(
-                coarse_ts, record, antenna_coords)
-        except Exception:
-            n_failed += 1          # decayed element, bad epoch, sgp4 blew up
-            continue
+    _log_coarse_rejects(n_failed, n_absurd)
+    return nearby
 
-        sat_az = np.asarray(azels)[:, 0]
-        sat_el = np.asarray(azels)[:, 1]
 
-        # SGP4 does not always flag a propagation that has gone off the rails, so check
-        # the answer rather than trusting an error code.
-        if not np.all(np.isfinite(sat_az)) or not np.all(np.isfinite(sat_el)):
-            n_absurd += 1
-            continue
-        if np.nanmax(np.asarray(ranges)) / 1e3 > MAX_PLAUSIBLE_RANGE_KM:
-            n_absurd += 1
-            continue
-
-        above = sat_el > 0.0
-        if not above.any():
-            continue
-
-        sep = np.full(sat_el.shape, np.inf)
-        sep[above] = angular_separation_deg(
-            beam_az[above], beam_el[above], sat_az[above], sat_el[above]
-        )
-        in_cone = sep <= search_radius_deg
-        if in_cone.any():
-            nearby[name] = (record, in_cone)
-
+def _log_coarse_rejects(n_failed, n_absurd):
     if n_failed or n_absurd:
         log.debug("coarse pass: %d satellites failed to propagate, %d gave implausible "
                   "positions", n_failed, n_absurd)
-    return nearby
 
+
+
+# Stage-2 time grid is cut into fixed tiles so the skyfield Time for each tile is built
+# once and reused by every satellite that needs it. A freshly built Time costs ~2.5 ms
+# of lazy precession/nutation setup no matter how few samples it holds, against ~0.16 ms
+# to evaluate a satellite on a warm one, so building one Time per satellite per span --
+# the obvious way to write this -- spends 94% of stage 2 on setup.
+NARROW_TILE = 256
+
+
+def _tile_range(idx, n_total, tile=NARROW_TILE):
+    lo = idx * tile
+    return lo, min(lo + tile, n_total)
+
+
+def narrow_one(SatCalc, record, tiles, tile_times, beam_az, beam_el, antenna_coords,
+               search_radius_deg, n_total, tile=NARROW_TILE):
+    """Re-examine one satellite on the finer grid, over the tiles stage 1 flagged.
+
+    Returns in-cone spans as indices into the full fine grid.
+    """
+    keep = []
+    for ti in sorted(tiles):
+        lo, hi = _tile_range(ti, n_total, tile)
+        try:
+            azels, _, ranges, _ = SatCalc.get_satellite_track(
+                tile_times[ti], record, antenna_coords)
+        except Exception:
+            continue
+        azels = np.asarray(azels)
+        sat_az, sat_el = azels[:, 0], azels[:, 1]
+        if not np.all(np.isfinite(sat_az)) or not np.all(np.isfinite(sat_el)):
+            continue
+        if np.nanmax(np.asarray(ranges)) / 1e3 > MAX_PLAUSIBLE_RANGE_KM:
+            continue
+        above = sat_el > 0.0
+        if not above.any():
+            continue
+        sep = np.full(sat_el.shape, np.inf)
+        sep[above] = angular_separation_deg(
+            beam_az[lo:hi][above], beam_el[lo:hi][above], sat_az[above], sat_el[above])
+        in_cone = sep <= search_radius_deg
+        if in_cone.any():
+            keep += [(lo + a, lo + b) for a, b in contiguous_spans(in_cone)]
+    return merge_spans(keep, join=1) if keep else []
+
+
+_NARROW = {}
+
+
+def _narrow_init(file_dir, fine_unix, beam_az, beam_el, site, search_radius_deg, tile):
+    global _NARROW
+    SatCalc = Satellite_Trajectory_Calculator(file_dir)
+    _NARROW = {
+        "SatCalc": SatCalc,
+        "fine_unix": fine_unix,
+        "beam_az": beam_az,
+        "beam_el": beam_el,
+        "coords": SatCalc.instantiate_antenna_coords(*site),
+        "radius": search_radius_deg,
+        "tile": tile,
+        "times": {},        # tile index -> skyfield Time, built once, reused
+    }
+
+
+def _narrow_tile_times(ti):
+    """The Time for one tile, built on first use and cached for the rest of the batch."""
+    w = _NARROW
+    if ti not in w["times"]:
+        lo, hi = _tile_range(ti, len(w["fine_unix"]), w["tile"])
+        w["times"][ti] = w["SatCalc"].ts.from_datetimes(
+            [datetime.fromtimestamp(float(t), tz=timezone.utc)
+             for t in w["fine_unix"][lo:hi]])
+    return w["times"][ti]
+
+
+def _narrow_batch(batch):
+    w = _NARROW
+    n_total = len(w["fine_unix"])
+    out = []
+    for name, omm_fields, tiles in batch:
+        record = []
+        for fields in omm_fields:
+            try:
+                satrec = Satrec()
+                omm.initialize(satrec, fields)
+                sat = EarthSatellite.from_satrec(satrec, w["SatCalc"].ts)
+                sat.name = name
+                record.append([sat, fields])
+            except Exception:
+                continue
+        if not record:
+            continue
+        times = {ti: _narrow_tile_times(ti) for ti in tiles}
+        spans = narrow_one(w["SatCalc"], record, tiles, times, w["beam_az"],
+                           w["beam_el"], w["coords"], w["radius"], n_total, w["tile"])
+        if spans:
+            out.append((name, spans))
+    return out
+
+
+def narrow_nearby_satellites(SatCalc, all_sats, stage1, scan_unix, scan_step, fine_unix,
+                             beam_az, beam_el, antenna_coords, search_radius_deg,
+                             file_dir, site, num_workers=None, tile=NARROW_TILE):
+    """
+    Stage 2: re-check the satellites stage 1 flagged, on the finer grid, but only over
+    the stretches where stage 1 put them inside its (much wider) cone.
+
+    Stage 1 has to use a generous cone because a coarse grid can step over a close
+    approach -- at a 10 s step that cone is 18 degrees, which lets through several
+    thousand satellites. Re-running those few over a few hundred samples each costs a
+    fraction of sweeping the whole catalogue at 1 s, and the inflated-cone bound makes
+    the two-stage result identical to the brute-force one.
+
+    Returns ``{name: spans}`` with spans indexing ``fine_unix``.
+    """
+    n_total = len(fine_unix)
+    t0 = fine_unix[0]
+    fine_step = fine_unix[1] - fine_unix[0] if n_total > 1 else 1.0
+
+    # Which tiles of the fine grid does each candidate need? Stage-1 spans get widened
+    # by one scan step either side, since a span's true edges lie between samples.
+    work = []
+    for name, spans in stage1.items():
+        tiles = set()
+        for lo, hi in spans:
+            a = int(max(0, np.floor((scan_unix[lo] - scan_step - t0) / fine_step)))
+            b = int(min(n_total - 1, np.ceil((scan_unix[hi] + scan_step - t0) / fine_step)))
+            tiles.update(range(a // tile, b // tile + 1))
+        if tiles:
+            work.append((name, [e[1] for e in all_sats[name]], sorted(tiles)))
+
+    if not work:
+        return {}
+
+    if num_workers in (None, 0):
+        num_workers, _ = calculate_dynamic_batches(
+            len(work), get_cpu_usage(interval=0.5), min_workers=2)
+    num_workers = min(num_workers, len(work))
+
+    if num_workers == 1:
+        _narrow_init(file_dir, fine_unix, beam_az, beam_el, site, search_radius_deg, tile)
+        return dict(_narrow_batch(work))
+
+    # Sort by first tile before striping, so satellites in a batch tend to want the same
+    # tiles and the per-worker Time cache actually gets hits.
+    work.sort(key=lambda w: w[2][0])
+    n_batches = max(num_workers, min(len(work) // 100, num_workers * 4))
+    batches = [work[i::n_batches] for i in range(n_batches)]
+    batches = [b for b in batches if b]
+
+    narrowed = {}
+    with mp.Pool(processes=num_workers, initializer=_narrow_init,
+                 initargs=(file_dir, fine_unix, beam_az, beam_el, site,
+                           search_radius_deg, tile)) as pool:
+        for hits in pool.imap_unordered(_narrow_batch, batches):
+            narrowed.update(dict(hits))
+    return narrowed
 
 
 # ---------------------------------------------------------------------------
@@ -744,33 +1046,76 @@ class SatelliteInterceptGenerator(object):
         c = self.antenna["coords_wgs84"]
         antenna_coords = SatCalc.instantiate_antenna_coords(c["lat"], c["lon"], c["el"])
 
-        # Coarse grid over the observation, end inclusive.
-        coarse_unix = np.arange(self.t_start.unix,
-                                self.t_end.unix + coarse_step, coarse_step)
-        coarse_unix = coarse_unix[coarse_unix <= self.t_end.unix + 1e-6]
-        coarse_ts = SatCalc.ts.from_datetimes(
-            [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in coarse_unix])
+        site = (c["lat"], c["lon"], c["el"])
+        workers = getattr(self.opt, "workers", None)
+        scan_step = float(getattr(self.opt, "scan_step", 10.0))
 
-        # Where the target sits in the sky, so the sweep can stay in az/el.
-        beam = self.target_icrs.transform_to(AltAz(
-            obstime=Time(coarse_unix, format="unix", scale="utc"),
-            location=self.location))
-        beam_az, beam_el = beam.az.deg, beam.alt.deg
+        def beam_track(unix):
+            """Target az/el on a time grid, so the sweeps can stay in az/el."""
+            aa = self.target_icrs.transform_to(AltAz(
+                obstime=Time(unix, format="unix", scale="utc"), location=self.location))
+            return aa.az.deg, aa.alt.deg
 
-        # A fast satellite can cross a small FOV entirely between two coarse samples, so
-        # cast a wider net here and let the fine pass cut it back to the real radius.
+        def grid(step):
+            g = np.arange(self.t_start.unix, self.t_end.unix + step, step)
+            return g[g <= self.t_end.unix + 1e-6]
+
+        coarse_unix = grid(coarse_step)
+        beam_az, beam_el = beam_track(coarse_unix)
+
+        # A fast satellite can cross a small FOV entirely between two samples, so every
+        # sweep searches a cone widened by how far one could move in a step, and the
+        # next stage cuts it back. The bound makes the staged answer identical to
+        # sweeping the whole catalogue at the finest step -- just far cheaper.
         cone = self.radius + MAX_SKY_RATE_DEG_S * coarse_step
-        log.info("coarse pass: %d satellites, %d steps of %g s, %.2f deg cone",
-                 len(all_sats), len(coarse_unix), coarse_step, cone)
 
-        nearby = find_nearby_satellites(SatCalc, all_sats, coarse_ts, beam_az, beam_el,
-                                        antenna_coords, cone)
-        log.info("coarse pass: %d candidate satellite(s) within %.2f deg", len(nearby), cone)
+        # Sweeping 19k satellites at the coarse step costs (satellites x steps), which
+        # over hours is most of the run. A quick scan on a much sparser grid throws out
+        # the satellites that were never close, and only the survivors are swept at the
+        # coarse step. Worth it once the sparser grid is actually sparser.
+        use_scan = scan_step > coarse_step and len(coarse_unix) > 4 * (scan_step / coarse_step)
+
+        t_coarse = time.time()
+        if use_scan:
+            scan_unix = grid(scan_step)
+            scan_ts = SatCalc.ts.from_datetimes(
+                [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in scan_unix])
+            scan_az, scan_el = beam_track(scan_unix)
+            scan_cone = self.radius + MAX_SKY_RATE_DEG_S * scan_step
+            log.info("scan pass: %d satellites, %d steps of %g s, %.1f deg cone",
+                     len(all_sats), len(scan_unix), scan_step, scan_cone)
+            t0_scan = time.time()
+            stage1 = find_nearby_satellites(
+                SatCalc, all_sats, scan_unix, scan_ts, scan_az, scan_el,
+                antenna_coords, scan_cone, self.out_dir, site, num_workers=workers,
+                label="scan pass")
+            log.info("scan pass: %d satellite(s) within %.1f deg in %.1f s",
+                     len(stage1), scan_cone, time.time() - t0_scan)
+
+            t0_narrow = time.time()
+            nearby = narrow_nearby_satellites(
+                SatCalc, all_sats, stage1, scan_unix, scan_step, coarse_unix,
+                beam_az, beam_el, antenna_coords, cone, self.out_dir, site,
+                num_workers=workers)
+            log.info("coarse pass: %d candidate(s) within %.2f deg in %.1f s",
+                     len(nearby), cone, time.time() - t0_narrow)
+        else:
+            coarse_ts = SatCalc.ts.from_datetimes(
+                [datetime.fromtimestamp(float(t), tz=timezone.utc) for t in coarse_unix])
+            log.info("coarse pass: %d satellites, %d steps of %g s, %.2f deg cone",
+                     len(all_sats), len(coarse_unix), coarse_step, cone)
+            nearby = find_nearby_satellites(
+                SatCalc, all_sats, coarse_unix, coarse_ts, beam_az, beam_el,
+                antenna_coords, cone, self.out_dir, site, num_workers=workers)
+            log.info("coarse pass: %d candidate(s) within %.2f deg in %.1f s",
+                     len(nearby), cone, time.time() - t_coarse)
+        log.debug("candidate search took %.1f s total", time.time() - t_coarse)
 
         sats = {}
-        for name, (record, in_cone) in nearby.items():
+        for name, spans in nearby.items():
+            record = all_sats[name]
             positions = self.refine_local_candidate(
-                SatCalc, record, antenna_coords, coarse_unix, in_cone,
+                SatCalc, record, antenna_coords, coarse_unix, spans,
                 coarse_step, fine_step)
             if not positions:
                 log.debug("%s: inside the coarse cone but not the %.3f deg FOV",
@@ -789,7 +1134,7 @@ class SatelliteInterceptGenerator(object):
         return transits
 
     def refine_local_candidate(self, SatCalc, record, antenna_coords, coarse_unix,
-                               in_cone, coarse_step, fine_step, pad_s=2.0):
+                               spans, coarse_step, fine_step, pad_s=2.0):
         """Resample one coarse candidate and keep the samples actually inside the FOV.
 
         Only the stretches where the coarse pass put the satellite inside the (inflated)
@@ -799,7 +1144,7 @@ class SatelliteInterceptGenerator(object):
         # Spans whose padding would overlap are merged, so the fine grid has no repeats.
         join = int(np.ceil(2 * pad_s / coarse_step))
         grids = []
-        for lo, hi in contiguous_spans(in_cone, join=join):
+        for lo, hi in merge_spans(spans, join=join):
             t0 = max(coarse_unix[lo] - pad_s, self.t_start.unix)
             t1 = min(coarse_unix[hi] + pad_s, self.t_end.unix)
             n = int(np.floor((t1 - t0) / fine_step)) + 1
@@ -1242,6 +1587,15 @@ def parse_command_line():
         help="""skip satchecker and go straight to the local calculation""",
     )
     parser.add_argument(
+        "--scan-step",
+        dest="scan_step",
+        type=float,
+        default=20.0,
+        help="""time resolution in seconds of the first sparse all-sky scan, which
+                throws out satellites that are never close (default 20.0). Set it to
+                --coarse-step or below to skip the scan and sweep everything directly.""",
+    )
+    parser.add_argument(
         "--coarse-step",
         dest="coarse_step",
         type=float,
@@ -1255,6 +1609,15 @@ def parse_command_line():
         default=0.1,
         help="""time resolution in seconds of the local per-candidate refinement
                 (default 0.1)""",
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        dest="workers",
+        type=int,
+        default=None,
+        help="""processes for the local all-sky search. Default sizes the pool from
+                current CPU load; 1 keeps everything in this process.""",
     )
     parser.add_argument(
         "-v",
